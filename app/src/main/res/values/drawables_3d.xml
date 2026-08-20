@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- 数组顺序 = 从前到后（下标 0 渲染在最上层）。这条是从原模板反推验证过的：模板默认的
+         layer_1 排第一、合成后确实浮在 layer_0（圆形底板）之上。
+         当前设计：layer_1 = 前窗+蜡烛（最前）→ layer_2 = 中层窗 → layer_0 = 背景+后窗虚影（最后）。 -->
+    <array name="icon_sdf_list">
+        <item>@drawable/icon_3d_sdf_1</item>
+        <item>@drawable/icon_3d_sdf_2</item>
+        <item>@drawable/icon_3d_sdf_0</item>
+    </array>
+    <array name="icon_3d_list">
+        <item>@drawable/icon_3d_layer_1</item>
+        <item>@drawable/icon_3d_layer_2</item>
+        <item>@drawable/icon_3d_layer_0</item>
+    </array>
+</resources>

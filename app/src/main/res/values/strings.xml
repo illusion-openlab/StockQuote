@@ -1,0 +1,6 @@
+<resources>
+    <!-- 桌面图标名 / 窗口 caption bar 上显示的名字。用户 2026-08-11 定名。
+         注意这只是**显示名**：applicationId 仍是 tech.illusion.stockquote，不能跟着改——
+         改包名等于换一个应用，会在设备上装成两个、并丢掉已存的自选股。 -->
+    <string name="app_name">千股查</string>
+</resources>

@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+        <application
+        android:name=".platform.SpatialApplication"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_spatial_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_spatial_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.StockQuoteTheme"
+        tools:targetApi="31"
+            android:localeConfig="@xml/locales_config">
+
+        <activity
+            android:name=".platform.LaunchActivity"
+            android:exported="true"
+            android:theme="@style/Theme.StockQuoteTheme">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Planar DefaultWindowContainer Configuration -->
+
+            <!-- The unique name/id of a WindowContainer -->
+            <meta-data android:name="pico.spatial.windowcontainer.id" android:value="YourPlanarWindowContainer"/>
+
+            <!-- Form/style of the WindowContainer
+                "0": Form.Automatic, a system default setting, set to Form.Planar currently (default)
+                "1": Form.Planar, a form where the WindowContainer behaves like a normal plane with default depth (default)
+                "2": Form.Volumetric, a form where the WindowContainer behaves like a volume allowing custom depth
+             -->
+            <meta-data
+                android:name="pico.spatial.windowcontainer.style"
+                android:value="1" />
+
+            <!-- Default size of the WindowContainer
+                 "[width]x[height]", uses dp as the unit unless specified otherwise
+             -->
+            <!-- 高度 640→660：用户 2026-08-11 要求调高 20dp。宽度 1080 不变（左列表 400 + 详情区 680）。
+                 改这里的同时必须同步 Main.kt 里 DetailWindow 的 defaultSize，两者要一样高。 -->
+            <meta-data android:name="pico.spatial.windowcontainer.defaultsize" android:value="1080x660" />
+
+            <!-- Unit of default size for the WindowContainer
+                 "dp" — uses density-independent pixels (default)
+                 "meters" — uses meters as the unit
+             -->
+            <meta-data android:name="pico.spatial.windowcontainer.defaultsize.unit" android:value="dp" />
+
+            <!-- Resize type of the WindowContainer
+                "0": ContainerResizeType.Automatic, a system default setting, set to ContainerResizeType.ContentMinSize currently (default)
+                "1": ContainerResizeType.ContentMinSize, constrains that WindowContainer's size cannot be smaller than root view's minSize (default)
+                "2": ContainerResizeType.ContentSize, constrains that WindowContainer's size cannot be smaller than root view's minSize and cannot be larger than root view's maxSize (default)
+             -->
+            <meta-data
+                android:name="pico.spatial.windowcontainer.resizetype"
+                android:value="1" />
+
+            <!-- Resize restriction of the WindowContainer
+                "0": ContainerResizeRestriction.NonUniformResizable, the WindowContainer can be resized freely along any axis (default)
+                "1": ContainerResizeRestriction.UniformResizable, the WindowContainer can only be resized uniformly, maintaining its aspect ratio
+             -->
+            <meta-data
+                android:name="pico.spatial.windowcontainer.resizerestriction"
+                android:value="0" />
+
+            <!-- Scale type of the WindowContainer
+                "0": WorldScale.Automatic, a system default setting, set to WorldScale.Dynamic currently (default)
+                "1": WorldScale.Dynamic, dynamic scale, the window stays comfortably legible and interactive at any distance by scaling up as it moves away and scaling down as it moves closer, creating the illusion of a consistent size
+                "2": WorldScale.Fixed, fixed scale, the window maintains a consistent scale but appears smaller as it moves farther along the z-axis, mimicking how objects in the real world look smaller with distance
+             -->
+            <meta-data android:name="pico.spatial.windowcontainer.worldscaletype" android:value="1" />
+
+            <!-- Caption bar type of the WindowContainer
+                "0": CaptionBarType.Default, the caption bar is always visible (default)
+                "1": CaptionBarType.AutomaticHide, the caption bar hides automatically after 3 seconds of inactivity
+             -->
+            <meta-data android:name="pico.spatial.windowcontainer.captionbar" android:value="0" />
+
+            <!-- Material background of the WindowContainer
+                "0": false, no material background
+                "1": true, uses Material.Regular as the background (default)
+             -->
+            <meta-data
+                android:name="pico.spatial.windowcontainer.materialbackground"
+                android:value="1"/>
+        </activity>
+
+        <meta-data android:name="icon.3d.list" android:resource="@array/icon_3d_list" />
+        <meta-data android:name="icon.sdf.list" android:resource="@array/icon_sdf_list" />
+    </application>
+
+</manifest>
