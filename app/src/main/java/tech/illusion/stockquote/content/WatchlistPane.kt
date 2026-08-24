@@ -1,6 +1,7 @@
 package tech.illusion.stockquote.content
 
 import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.background
 import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -229,14 +231,18 @@ internal fun WatchlistRow(
             // ListItem 内部是 `.then(modifier).spatialHoverEffect().background(colors.backgroundColor)`
             // （ListItem.kt:69-73），调用方的 modifier 在**前**，所以自己叠的背景会被 SDK 那层直接盖住。
             //
-            // 默认 backgroundColor 是 PicoTheme.colorScheme.fillLight（0x26FFFFFF，15% 白），而
-            // StockQuoteColorScheme 没有覆盖 fillLight——这就是"每一行都变成浅色圆角卡片"的原因，
-            // 也是选中态（4% 暖炭灰）一直几乎看不出来的原因：它被 15% 白盖掉了。
+            // SDK 默认 backgroundColor 取的是 PicoTheme.colorScheme.fillLight（原生默认 0x26FFFFFF，
+            // 15% 白，深色盘面上会把每一行都变成浅色圆角卡片）。StockQuoteColorScheme **已经显式覆盖了
+            // fillLight**（0xFF1A222C，见 StockTheme.kt 的第一条理由），所以那层白底不再存在。
+            //
+            // 选中态用 fillSecondary（0xFF1C2530，主题里的注释就写着"盘面选中行底"）。不要退回
+            // fillTertiary（0xFF151B22）：它和左栏底色 ListPaneBase（0xFF12171E）每个通道只差 3~4，
+            // 肉眼等于没有选中态。选中行还额外叠一条 3dp 琥珀强调条（见下面的 Box，契约 v5 §3.1）。
             //
             // ⚠️ 未选中必须传 Color.Transparent 而不是 Color.Unspecified：ListItemColors.copy() 内部是
             // takeOrElse{}（ListItem.kt:202），Unspecified 会被当成"没指定"回落到默认的 fillLight。
             colors = ListItemDefaults.listItemColors(
-                backgroundColor = if (selected) PicoTheme.colorScheme.fillTertiary else Color.Transparent,
+                backgroundColor = if (selected) PicoTheme.colorScheme.fillSecondary else Color.Transparent,
             ),
             // 设计稿 .row.selected 的圆角是 10dp；ListItem 默认 shape 是 RadiusLarge(16dp)，
             // 而且 ListItemDefaults.shape 是 internal 引用不到，所以显式传自己的。
@@ -279,6 +285,29 @@ internal fun WatchlistRow(
                 }
             },
         )
+
+        // 选中行的 3dp 琥珀强调条（契约 v5 §3.1）。画在 ListItem **之后**才盖得住行底色。
+        //
+        // 为什么要套一层 matchParentSize 的 Box，而不是直接 align(CenterStart).fillMaxHeight()：
+        // LazyColumn 给 item 的 maxHeight 是无界的，Box 又不传递 min 约束，fillMaxHeight() 在无界
+        // 约束下会退化成 minHeight(=0)，条子高度直接变 0 看不见。matchParentSize 拿到的是"其他子项
+        // 量完之后"的确切行高，套在外面再 fill 就有界了。
+        //
+        // start 内缩 4dp、上下各留 6dp：行自己的 shape 是 RoundedCornerShape(10dp)，贴着真边画会被
+        // 圆角切掉两头（同 ParamGrid 处理圆角内缩的思路）。
+        //
+        // 这个 Box 没有任何 pointerInput，不参与命中测试，所以不会挡掉下面 ListItem 的点击/长按。
+        if (selected) {
+            Box(modifier = Modifier.matchParentSize(), contentAlignment = Alignment.CenterStart) {
+                Box(
+                    modifier = Modifier
+                        .padding(start = 4.dp, top = 6.dp, bottom = 6.dp)
+                        .width(3.dp)
+                        .fillMaxHeight()
+                        .background(PicoTheme.colorScheme.interaction, RoundedCornerShape(2.dp)),
+                )
+            }
+        }
 
         if (menuOpen) {
             StockActionMenu(

@@ -58,7 +58,9 @@ class WatchlistOpsTest {
     fun `undo restores the snapshot's order index, not the live stock's`() {
         // 被移除的那只当时排在最前（置顶过，orderIndex 是负数），撤销必须还原到最前
         val current = listOf(stock("A", 0), stock("C", 2))
-        val restored = restoreRemoved(current, RemovedSnapshot(stock("B", -1), orderIndex = -1))
+        // 内嵌 Stock 自己的 orderIndex 故意给 99（≠ 快照的 -1）：两者相同的话，这条断言对
+        // "读 snapshot.orderIndex" 和 "错读 snapshot.stock.orderIndex" 两种实现都会通过，等于测了个寂寞。
+        val restored = restoreRemoved(current, RemovedSnapshot(stock("B", 99), orderIndex = -1))
 
         assertEquals(listOf("B", "A", "C"), restored.map { it.code })
     }

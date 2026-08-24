@@ -3,10 +3,10 @@ package tech.illusion.stockquote.content
 import android.os.Bundle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
@@ -131,40 +131,40 @@ fun WatchlistHost() {
         ?: watchlist.firstOrNull()?.code
 
     Row(modifier = Modifier.fillMaxSize()) {
-        Column(
+        // 撤销条是**浮层**（契约 v5 §6「浮在左栏底部」），所以这里是 Box 而不是 Column：
+        // 写成 Column + 兄弟节点的话，撤销条一出现就会把整份列表往上顶掉自己那一条的高度，
+        // 5 秒后又落回去——交互做到一半整栏重排。现在它盖在列表上面，列表一动不动。
+        Box(
             modifier = Modifier
                 .width(ListPaneWidth)
                 .fillMaxHeight()
                 .background(ListPaneBase),
         ) {
-            // Modifier.weight 靠 ColumnScope 隐式 receiver 解析，不要显式 import
-            Box(modifier = Modifier.weight(1f)) {
-                if (searchOpen) {
-                    SearchPane(
-                        onClose = {
-                            searchOpen = false
-                            // 契约 v5 §5.3 第 ③ 条：退出搜索清掉 Adding/Failed 残留，
-                            // 否则下次进来会看到上次留下的红叹号。
-                            StockRepository.clearOpStates()
-                        },
-                        onSelect = { selectedCode = it },
-                        onRemoved = onRemoved,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    WatchlistPane(
-                        selectedCode = activeCode,
-                        onSelect = { selectedCode = it },
-                        onOpenSearch = { searchOpen = true },
-                        onOpenInNewWindow = openInNewWindow,
-                        onPinToTop = pinToTop,
-                        onRemoveRequest = { code -> StockRepository.remove(code)?.let(onRemoved) },
-                        sortKey = sortKey,
-                        sortAscending = sortAscending,
-                        onToggleSort = ::toggleSort,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
+            if (searchOpen) {
+                SearchPane(
+                    // 清 Adding/Failed 残留（契约 v5 §5.3 第 ③ 条）不在这里做：那个保证已经挪进
+                    // SearchPane 自己的 DisposableEffect，覆盖所有离开 composition 的路径，不只这一颗按钮。
+                    onClose = { searchOpen = false },
+                    onSelect = { selectedCode = it },
+                    onRemoved = onRemoved,
+                    // 加入自选也给撤销条（契约 v5 §0 缺陷 7 / §4 示意图）：撤销一次"加入"就是 remove(code)，
+                    // 复用移除那套 offerUndo/UndoBar，不另造一套反馈机制。
+                    onAdded = { code, name -> offerUndo("已加入「$name」") { StockRepository.remove(code) } },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                WatchlistPane(
+                    selectedCode = activeCode,
+                    onSelect = { selectedCode = it },
+                    onOpenSearch = { searchOpen = true },
+                    onOpenInNewWindow = openInNewWindow,
+                    onPinToTop = pinToTop,
+                    onRemoveRequest = { code -> StockRepository.remove(code)?.let(onRemoved) },
+                    sortKey = sortKey,
+                    sortAscending = sortAscending,
+                    onToggleSort = ::toggleSort,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
             undo?.let { request ->
                 key(undoGeneration) {
@@ -174,7 +174,10 @@ fun WatchlistHost() {
                             request.undo()
                             undo = null
                         },
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
                     )
                 }
             }

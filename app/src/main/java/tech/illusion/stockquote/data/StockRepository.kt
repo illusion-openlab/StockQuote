@@ -245,6 +245,15 @@ object StockRepository {
     }
 
     /**
+     * 契约 v5 §5.3 第 ② 条：搜索词变化导致某个 code 不再出现在结果里时，调用方用这个方法把它的
+     * Adding/Failed 残留一并清掉，否则用户改回同一个词时会看到过期状态。
+     */
+    fun pruneOpStates(visibleCodes: Set<String>) {
+        val stale = _opStates.keys.filterNot { it in visibleCodes }
+        stale.forEach { _opStates.remove(it) }
+    }
+
+    /**
      * 移除自选，返回撤销所需的快照（没这只股票则返回 null）。
      *
      * 返回快照而不是 Unit：契约 v5 §6 用"即时移除 + 5 秒撤销条"取代了确认弹窗，撤销要能按**原位**
@@ -289,9 +298,19 @@ object StockRepository {
      * 入 `_universe`/`_watchlist`**——不接受"先加个空壳等后台补数据"：[Stock.price]/[Stock.changePercent]
      * 全项目到处假设 `hist` 至少 2 个点，`WatchlistRow` 一进 composition 就会调用它们，空壳会立刻崩溃。
      *
-     * 抓取失败返回 `false`，不做任何改动；调用方（`QueryScreen`）自己决定怎么提示用户重试。
+     * 抓取失败返回 `false`，并把 `_opStates[code]` 置为 [Membership.Failed]（`_universe`/`_watchlist`
+     * 不动）——行尾那颗 [tech.illusion.stockquote.content.MembershipToggle] 靠这个状态变成红色 `!`，
+     * 再点一次就是重试。调用方是 `SearchPane`（旧的 `QueryScreen` 已经不存在了）。
+     *
+     * 并发重复点击也返回 `false`：见函数开头那条 `Adding` 守卫。
      */
     suspend fun addRemote(code: String, name: String): Boolean {
+        // 双击竞态守卫：下面的 fetchHistory 是挂起点，第二次点击会在第一次的 _watchlist 写入落地之前
+        // 就通过 isInWatchlist 检查，两条协程各自往 _watchlist 追加同一个 code —— LazyColumn 的
+        // `key = { it.code }` 一撞上重复 key 就直接抛异常崩掉。
+        // Adding 是第一次点击在**挂起之前**同步写下的，所以这条同步检查足以关掉那个窗口。
+        // 注意只挡 Adding，不挡 Failed：Failed 状态下再点是用户主动重试，必须放行。
+        if (_opStates[code] == Membership.Adding) return false
         if (isInWatchlist(code)) return true
         _universe.find { it.code == code }?.let { existing ->
             _watchlist = _watchlist + existing.copy(orderIndex = orderCounter++)

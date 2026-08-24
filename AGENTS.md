@@ -9,10 +9,12 @@
 早期版本里出现过、后来被否掉的方案（Tab 分栏单窗口、Subwindow 伴生窗口、3D 蜡烛图/`Stage`）都在变更记录里
 写明了否掉的原因，不要凭直觉把它们加回来。
 
-**当前状态（2026-08-11，契约 v2 + v3 都已实施完毕）**：主窗口是**左右分栏**（v2：400dp 自选股列表 +
+**当前状态（2026-08-24，契约 v2 + v3 + v5 都已实施完毕）**：主窗口是**左右分栏**（v2：400dp 自选股列表 +
 右侧详情区），点行选中、长按呼出上下文菜单（新窗口打开/置顶/移除）、右上角"在新窗口打开"弹独立窗口；
-列表含编辑模式排序/删除、星标、查询子视图，自选股的**增删/星标/顺序会真正持久化**
+列表含编辑模式删除、**随时可点的表头排序**、**只接管左栏的搜索态**，自选股的**增删/顺序会真正持久化**
 （`SharedPreferences`，已验证跨进程重启存活）。v2 走了 4 轮门禁 B，见下面"主窗口 v2 分栏改版验证"。
+**契约 v5（"同花顺"深色改版，2026-08-24）已实施完毕，但还没有做过设备/模拟器截图验证**——改了什么、
+还欠哪一步验证，见"下一步"第 14 条。
 **详情窗口**（第二个独立 `WindowContainer`）已按**设计契约 v3** 改版完成并过了 5 轮门禁 B 截图验证：
 周期 Tab 移除分时（只剩日K/周K/月K）、均线扩到 M5/M10/M20/M30/M180 + 图例数值条、成交量拆成独立面板
 （带 M5/M10 量能均线）、K 线补右侧价格刻度/底部稀疏日期/自动极值标注、MACD/KDJ/RSI 面板标题栏显示最新值、
@@ -34,7 +36,7 @@ kline 现在解析真实 OHLCV+日期，但**那条链路至今没有一次被�
   - 两个窗口都在 `SpatialAppScope` 里用 Kotlin DSL 声明，**不是**在 manifest 里加 `<activity>`：
     ```kotlin
     fun mainApp(scope: SpatialAppScope) = with(scope) {
-        DefaultWindowContainer { PicoTheme { WatchlistScreen() } }
+        DefaultWindowContainer { PicoTheme { WatchlistHost() } }
         WindowContainer(
             id = "DetailWindow",
             form = Form.Planar,
@@ -55,10 +57,11 @@ kline 现在解析真实 OHLCV+日期，但**那条链路至今没有一次被�
     （定义在 `Main.kt`）。
   - **"复用同一 tag 的窗口实例时，内容会不会带着新 bundle 重新走一遍 composition"这件事，没有在真机/模拟器上
     实测确认过**——只从源码确认了 `WindowContainerScope.bundle` 是曾经打开时传入的值，但复用路径下 Compose
-    是否会用新 bundle 重新触发 content lambda，源码层面看不出来。为了不依赖这条未验证的假设，
-    `WatchlistScreen.openDetail()` 改成保守写法：每次都先 `closeWindowContainer(id)` 再
-    `openWindowContainer(id, tag, bundle)`，用"关闭再开"代替"指望复用会自动刷新"，牺牲一点点切换详情窗口
-    时的重建开销，换来行为上的确定性。
+    是否会用新 bundle 重新触发 content lambda，源码层面看不出来。当时为了不依赖这条未验证的假设，开详情窗口曾改成保守写法：每次都先
+    `closeWindowContainer(id)` 再 `openWindowContainer(id, tag, bundle)`。**这条后来被推翻并删掉了**——见
+    文末"多个详情窗口靠 tag，不靠多声明 container"：不带 tag 的 `closeWindowContainer(id)` 会关掉该 id 下
+    **所有**窗口，正是"只能开一个详情窗口"的直接原因。现在的实现是 `WatchlistHost.openInNewWindow`，
+    只 open、不预先 close，用 `detailWindowTag(code)` 区分实例。
   - 每个 `WindowContainer` 绑定独立 Activity——**两个窗口之间不能假设共享 Compose 状态或内存对象引用**，
     自选股数据要通过进程内单例 Repository（`StockRepository`，已实现，见下方"持久化"）在两侧同步，不能靠
     直接传对象引用。
@@ -80,9 +83,10 @@ kline 现在解析真实 OHLCV+日期，但**那条链路至今没有一次被�
       独立窗口没有这颗按钮，传默认 0。**动这颗按钮的尺寸时记得同步改 inset，否则价格会被压到按钮下面。**
     - **菜单三项和列表行长按菜单是同一个 `StockActionMenu`**，别在两处各写一份，否则将来只会改歪一个。
     - `Menu` 是 Popup，渲染在面板之外的独立层，锚在右上角**不会**被面板边缘裁切（已截图确认）。
-  - **`sortKey`/`sortAscending`/`pendingDeleteCode` 和删除确认弹窗都在 `WatchlistHost` 层**，不在
-    `WatchlistPane` 里。原因：`置顶`/`移除` 现在有**两个**入口（列表行长按菜单、详情区 `⋯` 菜单），两边必须
-    共用同一份排序状态和同一个确认弹窗，否则会出现"从详情区置顶不清排序"或者弹两个框。
+  - **`sortKey`/`sortAscending` 和撤销条状态（`undo`/`undoGeneration`/`offerUndo`）都在 `WatchlistHost`
+    层**，不在 `WatchlistPane` 里。原因：`置顶`/`移除` 有**三个**入口（列表行长按菜单、详情区 `⋯` 菜单、
+    搜索结果行尾的四态钮），都必须共用同一份排序状态和同一条撤销条，否则会出现"从详情区置顶不清排序"或者
+    冒出两条撤销条。（契约 v5 之前这里是 `pendingDeleteCode` + 删除确认 `AlertDialog`，已被撤销条取代。）
   - **切换选中股票时收起 `⋯` 菜单用 `LaunchedEffect(code)`，不要拿 `code` 当 `remember` 的 key**——SDK 的
     点击组件保留首次传入的 lambda，remember key 一变就会往已被丢弃的 `MutableState` 里写
     （`pico-sdk-compose-pitfalls` 陷阱 1）。
@@ -102,19 +106,33 @@ kline 现在解析真实 OHLCV+日期，但**那条链路至今没有一次被�
   - **裸 `pointerInput` 不像 `clickable` 那样自带按压反馈**，所以行上的 `indication`/haptic 要靠
     `detectTapGestures` 的 `onPress` 手动 emit `PressInteraction.Press/Release/Cancel` 来驱动同一个
     `interactionSource`。`WatchlistRow` 里就是这么写的，照抄那个写法即可。
-  - **查询子视图仍然整窗接管**，不是只替换左栏——`QueryScreen` 的布局是按整窗宽度排的，塞进 400dp 需要
-    重排，不在 v2 范围内。
-  - 默认只读浏览；点"编辑"按钮才能表头排序（名称/价格/涨跌幅，正序→倒序→取消三态）、才出现删除按钮；
-    星标标记**不**受编辑模式限制，随时可点。
+  - **搜索态只接管左栏**（契约 v5 §4，2026-08-24 落地，取代了 v2 时代 `QueryScreen` 的整窗接管）：
+    `searchOpen` 为真时左栏那 400dp 换成 `SearchPane`，**右侧详情区原地不动**，继续显示当前选中的股票。
+    这是相对整窗接管的核心收益——加完股票退出搜索，刚加的那只就在原地列表里，不会再出现"加完之后那只去哪了"。
+  - **表头排序（名称/最新价/涨跌幅，降序→升序→取消三态）随时可点，不再受编辑模式限制**（契约 v5 §3.1）。
+    编辑模式现在只剩一件事：为真时每行尾出现 `✕`。
   - **置顶**（`StockRepository.moveToTop`）把 `orderIndex` 压到当前最小值 − 1，**并且调用方要同时把
     `sortKey` 清成 null**（契约 v2 §3 第 2 条）：如果用户正按价格/涨跌幅排序，置顶只改默认顺序不会带来
     任何肉眼可见的位置变化，会显得"点了没反应"。清排序这件事留在 UI 侧，因为排序是 UI 状态。
-  - **删除一律走既有的二次确认 `AlertDialog`**（编辑模式的 ✕ 和长按菜单的"移除"都走它），不是无确认直接删。
-    `pendingDeleteCode` 存的是**代码字符串而不是 `Stock` 快照**——`Stock` 每次报价轮询都会被替换成新实例，
-    捕获旧对象会拿到过期价格。
-  - 顶部编辑栏只有两个元素，从左到右：编辑按钮 → 搜索栏（不含数量文案，这个曾经加过又被要求移除）。
-  - 点搜索栏进入"查询列表"子视图（同一个 `WindowContainer` 内的模式切换，不是新窗口）：浏览/筛选全市场
-    股票，选中某一行才出现"加入自选"按钮（未选中不显示）。
+  - **移除是即时的 + 一条 5 秒撤销条**（契约 v5 §6，取代了旧的二次确认 `AlertDialog`）。三个移除入口
+    （编辑模式的 ✕、行长按菜单"移除"、详情区 `⋯` 菜单"移除"）都汇进 `WatchlistHost.onRemoved`。
+    `StockRepository.remove(code)` 返回 `RemovedSnapshot`（股票 + 原 `orderIndex`），撤销按**原位**插回，
+    不是追加到末尾（`restoreRemoved`，有单测守着）。**加入自选同样给撤销条**（"已加入「XX」"），撤销一次
+    加入就是 `remove(code)`，复用同一套 `offerUndo`/`UndoBar`。撤销条是**浮层**（左栏那个 `Box` 的
+    `align(Alignment.BottomCenter)`），不是 `Column` 的兄弟节点——写成兄弟节点会在它出现/消失时把整份列表
+    顶上去又落回来。
+    ⚠️ 撤销条必须 `key(undoGeneration) { UndoBar(...) }` 包一层，理由见 `UndoBar` 的 KDoc
+    （`pico-sdk-compose-pitfalls` 陷阱 1：SDK 可点组件会保留**首次**传入的 lambda）。
+  - 左栏顶部两行：第一行 `自选股` 标题 + 右侧"编辑"`ToggleButton`；第二行是一个**假装成搜索框的
+    `Button`**（`🔍 代码 / 名称`），点了整栏切到 `SearchPane`。**刻意不放真 `SearchField`**：真输入框会把
+    系统 IME 拉起来占掉半个视野，而这一步用户只是想"进搜索"，还没开始打字（真的 `SearchField` 在
+    `SearchPane` 里）。
+  - **搜索结果行的加/删收敛到行尾一颗四态钮 `MembershipToggle`**（契约 v5 §5.4）：
+    `NotAdded ＋ / Adding ◌ / Added ✓ / Failed !`，四态一律留在琥珀色系里、只有形态在变。状态由
+    `StockRepository.membershipOf(code)` 单一推导（`resolveMembership(inWatchlist, pending)`，"在自选表里"
+    压过一切残留 pending，`WatchlistOpsTest` 锁了这条优先级），不再有"先点行选中、才冒出加入按钮"那个中间态。
+    ⚠️ **调用方必须 `key(membership) { MembershipToggle(...) }` 包一层**，同样是陷阱 1：`onClick` 里
+    `when (membership)` 会读到 SDK 保留下来的旧值，刚加完再点 ✓ 会走回 `onAdd()`。
 - **指标**：免费数据源都不直接提供计算好的技术指标，指标计算全部本地实现（`data/StockMath.kt`），**全部 5 个
   指标 MA/MACD/KDJ/RSI/BOLL 现在都是真实计算，没有占位**（2026-08-11 完成，见"关键文件"里 `StockMath.kt`/
   `KdjChart.kt`/`RsiChart.kt`/`KLineChart.kt` 的说明）。
@@ -245,29 +263,41 @@ kline 现在解析真实 OHLCV+日期，但**那条链路至今没有一次被�
     过滤，不代表代码没跑。**不要靠这台设备上的 `adb logcat` 判断第三方 App 的 debug 日志有没有打**，改用
     截图里的实际数值判断更可靠。
 - **红涨绿跌**：中国大陆市场惯例（和欧美相反），UI 里任何涨跌色一定要按这个来，不要用国际默认的红跌绿涨。
-- **"素雅"配色**：用户反馈过一次"当前列表风格与画板上的设计稿不符"，已通过给 `PicoTheme` 传自定义
-  `ColorScheme`（`content/StockTheme.kt` 的 `StockQuoteColorScheme`，`Main.kt` 里
-  `PicoTheme(colorScheme = StockQuoteColorScheme) { ... }`）把 `labelPrimary/Secondary/Tertiary/Quaternary`、
-  `interaction`、`error`、`dividerLine`、`fillSecondary`、`fillTertiary` 换成 HTML 原型 v0.3 画板上确认过的
-  暖色调色板（暖炭灰文字 + 石青灰蓝强调色 + 赭红危险色）。**故意选的是固定色而不是系统自适应的 vibrant 配色**——
-  这个 app 就是要始终保持这个视觉身份，不想跟着系统深浅色变来变去（和 SpacePlayer 项目"配色最终定版"时的选择
-  一致）。窗口本身的玻璃背景**没有改**，还是系统默认 `Material.Regular`——只重新赋色了内容层，没有做
-  opaque-root 覆盖，符合 `spatial-ui-design-style` 技能 Rule 4 的默认要求。
+- **"同花顺"深色不透明盘面配色（契约 v5 §1/§2，2026-08-24 取代了旧的"素雅"暖纸风）**：整套色仍然通过
+  `PicoTheme(colorScheme = StockQuoteColorScheme)` 在 `Main.kt` 注入（`content/StockTheme.kt`），但色板换成
+  了交易终端那一套深蓝灰底 + 琥珀金强调：`fillPrimary 0xFF0F1318`（面板基底）/ `fillSecondary 0xFF1C2530`
+  （选中行底）/ `fillTertiary 0xFF151B22`（分区格子底）/ `fillLight 0xFF1A222C` / `labelPrimary 0xFFEDF1F6`
+  …… / `interaction 0xFFE8B34A`（琥珀强调）/ `error 0xFFFF6B63`。仍然是**固定色而不是系统自适应**——这个
+  app 要始终保持自己的视觉身份，不跟着头显深浅色偏好变（和 SpacePlayer"配色最终定版"时的选择一致）。
+  图表业务色（红涨绿跌、四态钮槽色、左栏底色 `ListPaneBase`）全部收在 `content/StockColors.kt`，不进主题。
+  - **两个窗口的毛玻璃都关掉了，改成应用自己画不透明底**：`AndroidManifest.xml` 的
+    `pico.spatial.windowcontainer.materialbackground` 改成 `0`（`DefaultWindowContainer` 只收 content、
+    没有 `enableMaterialBackground` 参数，只能走 manifest），详情窗口那个 `WindowContainer` 则显式传
+    `enableMaterialBackground = false`；两处内容根部各铺一个
+    `Box(Modifier.fillMaxSize().background(PicoTheme.colorScheme.fillPrimary))`。这是对
+    `spatial-ui-design-style` Rule 4「默认保留系统玻璃」的**有意偏离**，理由是盘面数字要绝对可读。
+  - ⚠️ **`fillLight` 必须显式覆盖**：SDK 默认是 15% 白（`0x26FFFFFF`），而 `ListItem` 的默认
+    `backgroundColor` 取的就是它——不覆盖的话深色面板上每一行又会变回浅色圆角卡片，选中态也会被它盖掉。
+  - ⚠️ **`labelPrimaryLight` 保留默认（白）**：它同时是所有默认 `IconButton` 的 `contentColor`，改成深色
+    会让默认 `IconButton` 变成"深底深字"整个消失。琥珀实心钮上的深色文字在调用处单独传。
+  - ⚠️ **这套深色配色目前只是"已实现"，还没有在设备或模拟器上截图验证过**——实际不透明度、对比度、选中行
+    那条 3dp 琥珀强调条的可见性都还没有画面证据，不要把它当成已确认的结论。见"下一步"第 14 条。
 - **范围排除**：不做交易下单、不做投资建议、不做账号/云同步、首版不做港股/美股/期货。这些是刻意排除，不是
   漏做。
 - **语音**：设计目标是让语音跳过多步手动流程（比如"加入 XX 自选"语音直接执行，跳过"点查询→输入→选中→点
   加入"四步）。**⚠️ 语音识别引擎的具体技术路径（PICO 系统能力 vs 标准 Android `SpeechRecognizer`）还没有
   验证**——这是开始做语音功能时第一件要查清楚的事，别假设某个 API 存在就直接写。
-- **持久化：`SharedPreferences`，不是 Room**——自选股需要持久化的形状就是"一份有序的股票代码列表 + 一个
-  加星子集"，是扁平的 key=value 数据，不是关系型数据；引入 Room 需要新增 KSP/kapt 编译步骤，在这个已经因为
+- **持久化：`SharedPreferences`，不是 Room**——自选股需要持久化的形状就是"一份股票代码的
+  有序列表"，是扁平的 key=value 数据，不是关系型数据；引入 Room 需要新增 KSP/kapt 编译步骤，在这个已经因为
   `exclude()` 规则而比较脆弱的 classpath 上（见下面 `Modifier.weight` 那条坑）风险收益比不划算。真正的市场
-  数据（`hist`/价格）从不写入本地——只有"哪些代码在自选里、顺序、星标"这三样是需要跨重启保留的用户偏好，本质
-  上和 SpacePlayer 项目当年为类似简单偏好选的方案一致。`WatchlistLocalStore` 存两个字符串：逗号分隔的有序
-  代码列表、逗号分隔的加星代码集合；`StockRepository.init(context)` 在 `SpatialApplication.onCreate()` 里调
-  一次，读到已保存数据就覆盖默认种子数据，读不到（首次安装）就保留硬编码的默认自选股。每次
-  `toggleStar`/`remove`/`addFromUniverse` 之后立即同步落盘（数据量小，不需要防抖）。已验证：手动触发一次
-  "删除 招商银行 + 星标 中国平安"的变更后，`adb install -r`（保留数据）+ 完全重启进程，变更原样还在
-  （`./artifacts/persistence_verified.png`）。
+  数据（`hist`/价格）从不写入本地——只有"哪些代码在自选里、顺序"这两样是需要跨重启保留的用户偏好，本质
+  上和 SpacePlayer 项目当年为类似简单偏好选的方案一致。`WatchlistLocalStore` 现在只存**一个**字符串：
+  逗号分隔的有序代码列表（契约 v5 删掉星标之后，那个加星集合的 key 也一并去掉了）；
+  `StockRepository.init(context)` 在 `SpatialApplication.onCreate()` 里调一次，读到已保存数据就覆盖默认
+  种子数据，读不到（首次安装）就保留硬编码的默认自选股。每次
+  `remove`/`restore`/`moveToTop`/`addFromUniverse`/`addRemote` 之后立即同步落盘（数据量小，不需要防抖）。
+  已验证（2026-08-10，还带星标的那个版本）：手动触发一次"删除 招商银行 + 星标 中国平安"的变更后，
+  `adb install -r`（保留数据）+ 完全重启进程，变更原样还在（`./artifacts/persistence_verified.png`）。
 
 ## 关键文件
 
@@ -275,9 +305,23 @@ kline 现在解析真实 OHLCV+日期，但**那条链路至今没有一次被�
   `DefaultWindowContainer`（自选股列表）+ 命名的 `WindowContainer(id = DETAIL_WINDOW_ID, ...)`（详情窗口，
   640×480dp，`Form.Planar`）。`DETAIL_WINDOW_ID`/`DETAIL_WINDOW_TAG` 两个常量也定义在这个文件，其它文件要开
   详情窗口都应该 import 这两个常量，不要在别处重新写字符串字面量。
-- `app/src/main/java/tech/illusion/stockquote/content/WatchlistScreen.kt` — 自选股列表主屏
-  （`WatchlistHost` 是入口，内部切换 `WatchlistScreen`/`QueryScreen`）；编辑模式、表头排序、星标、删除确认
-  弹窗、`openDetail()`（关闭再开详情窗口的那段逻辑）都在这里。
+- `app/src/main/java/tech/illusion/stockquote/content/WatchlistHost.kt` — 主窗口入口（`WatchlistHost()`），
+  左右分栏的那个 `Row`。左栏是一个 `Box`：`searchOpen ? SearchPane : WatchlistPane` + 浮在底部的撤销条；
+  右栏是 `DetailPane`（`DetailScreen` + 右上角 `⋯` 浮层菜单）。宿主级状态（`searchOpen`/`selectedCode`/
+  `sortKey`/`sortAscending`/`undo`/`undoGeneration`）、`offerUndo`、`openInNewWindow`、`pinToTop`、
+  行情轮询的两个 `LaunchedEffect`，以及两处共用的 `StockActionMenu` 都在这个文件。
+  （契约 v5 之前这里叫 `WatchlistScreen.kt`，内部切换 `WatchlistScreen`/`QueryScreen`；那两个文件已不存在。）
+- `app/src/main/java/tech/illusion/stockquote/content/WatchlistPane.kt` — 左栏常态：标题行 + 编辑
+  `ToggleButton` + 假搜索框 `Button` + 三个 `SortHeader` + `LazyColumn` of `WatchlistRow`。`ListPaneWidth`
+  （400dp）定义在这里。`WatchlistRow` 是"行背景 / 选中态 / 长按菜单锚"三件事的落点，改行外观之前先读它上面
+  那段关于 `ListItem` 内部图层顺序和 `fillLight` 的长注释。
+- `app/src/main/java/tech/illusion/stockquote/content/SearchPane.kt` — 左栏搜索态：`SearchField` +
+  防抖 300ms 的全市场搜索 + 本地/全市场两段结果列表（`ResultRow`）。清 `Adding`/`Failed` 残留的两条时机
+  （结果集变化 → `pruneOpStates`；离开 composition → `clearOpStates`）都挂在这个文件自己的
+  `LaunchedEffect`/`DisposableEffect` 上，不要挪回调用方的"取消"回调里——那样只覆盖一条退出路径。
+- `app/src/main/java/tech/illusion/stockquote/content/MembershipToggle.kt` — 行尾四态钮
+  `MembershipToggle`（＋/◌/✓/!）和 5 秒撤销条 `UndoBar`。**这两个组件的调用方都必须包一层 `key(...)`**，
+  理由写在各自的 KDoc 里（`pico-sdk-compose-pitfalls` 陷阱 1）。
 - `app/src/main/java/tech/illusion/stockquote/content/DetailScreen.kt` — 详情窗口内容（**契约 v3 改版后
   的唯一一份详情实现**，见下面"详情页设计统一"）。从 `bundle` 读 `code` 找到对应 `Stock`；周期 Tab 用
   `SegmentControl`/`SegmentItem`（现在只有 日K/周K/月K，分时已移除），区间和指标芯片用 `ToggleableChip`
@@ -321,25 +365,29 @@ kline 现在解析真实 OHLCV+日期，但**那条链路至今没有一次被�
   `max`/`min`，避免线被裁切出画布——新增叠加线时记得一起加进量程，不然 M180 这种长窗口均线会贴边消失。
 - `app/src/main/java/tech/illusion/stockquote/data/StockDataRepository.kt` / `EastmoneySource.kt` /
   `SinaSource.kt` / `RemoteStock.kt` / `NetUtil.kt` — 真实市场数据抓取，见上面"数据源"小节。
-- `app/src/main/java/tech/illusion/stockquote/content/QueryScreen.kt` — 查询子视图（同一
-  `WindowContainer` 内的模式切换），`SearchField` + 选中后出现"加入自选"。
 - `app/src/main/java/tech/illusion/stockquote/content/Sparkline.kt` — 列表行的迷你走势线，纯 `Canvas`
   画线，不依赖任何图表库。
 - `app/src/main/java/tech/illusion/stockquote/content/StockColors.kt` — 红涨绿跌两个固定色，均带
   `// design-style: fixed-figma-color` 标注（`spatial-ui-design-style` 技能的 lint 约定，参见
   `scripts/verify-design-style.sh`）。
-- `app/src/main/java/tech/illusion/stockquote/content/StockTheme.kt` — `StockQuoteColorScheme`，"素雅"
-  自定义配色，通过 `PicoTheme(colorScheme = ...)` 在 `Main.kt` 里整体注入，不要在各个 Composable 里散着写
+- `app/src/main/java/tech/illusion/stockquote/content/StockTheme.kt` — `StockQuoteColorScheme`，"同花顺"
+  深色不透明盘面配色（契约 v5），通过 `PicoTheme(colorScheme = ...)` 在 `Main.kt` 里整体注入，不要在各个 Composable 里散着写
   `Color(0x...)` 覆盖颜色——新组件要跟着这套色板就用 `PicoTheme.colorScheme.<role>`，要新增角色就改这个文件。
 - `app/src/main/java/tech/illusion/stockquote/data/Stock.kt` / `StockRepository.kt` — 数据模型 +
   进程内单例（Compose 快照状态 `mutableStateOf`，不是 `StateFlow`——同一进程内任何 Composition 读取
   `StockRepository.watchlist`/`universe` 都会在写入时自动收到重组通知）。`refreshAll()`/
   `refreshWatchlistQuotes()` 调 `StockDataRepository` 拉真实数据、写回 `_universe`/`_watchlist`（两边都要
   同步更新，因为 `_watchlist` 里存的是独立拷贝，不是对 `_universe` 条目的引用）。硬编码的 `universeSeed`
-  现在只是"抓取成功前的占位显示 + 两个源都失败时的永久兜底"，不再是唯一数据源。自选股成员/星标/顺序是独立
+  现在只是"抓取成功前的占位显示 + 两个源都失败时的永久兜底"，不再是唯一数据源。自选股成员/顺序是独立
   的真实持久化数据，见下一条。
+  加/删自选相关的接口：`membershipOf` / `addFromUniverse`（本地命中，同步）/ `addRemote`（全市场命中，
+  `suspend`，**必须先抓到真实历史才入表**，否则 `hist` 不足 2 个点的空壳行一进 composition 就崩）/
+  `remove` + `restore`（撤销）/ `clearOpStates` + `pruneOpStates`（清 `Adding`/`Failed` 残留）。
+  ⚠️ `addRemote` 开头那条 `if (_opStates[code] == Membership.Adding) return false` 是**并发守卫，别删**：
+  它后面的 `fetchHistory` 是挂起点，两次快速点击会双双越过 `isInWatchlist` 检查，把同一个 code 追加两次，
+  然后 `LazyColumn` 的 `key = { it.code }` 撞上重复 key 直接抛异常。
 - `app/src/main/java/tech/illusion/stockquote/data/WatchlistLocalStore.kt` — `SharedPreferences` 持久化，
-  只存代码列表和加星集合两个字符串，不存市场数据。`StockRepository` 的每个写操作之后都会调它的 `save()`。
+  只存一个字符串（逗号分隔的有序代码列表），不存市场数据，也不再有加星集合。`StockRepository` 的每个写操作之后都会调它的 `save()`。
 - `app/src/main/java/tech/illusion/stockquote/platform/LaunchActivity.kt` — 模板生成，暂未改动。
 - `app/src/main/java/tech/illusion/stockquote/platform/SpatialApplication.kt` — `onCreate()` 里现在会先
   `StockRepository.init(this)`（触发 `WatchlistLocalStore` 读盘）再 `launch(::mainApp)`；这是整个 app 唯一
@@ -353,7 +401,7 @@ kline 现在解析真实 OHLCV+日期，但**那条链路至今没有一次被�
 
 全部 2D UI 必须用 SpatialUI（`com.pico.spatial.ui.design.*`），根节点/每个 `WindowContainer` 内容都要包一层
 `PicoTheme { ... }`。**禁止** `androidx.compose.material` / `material3` / `MaterialTheme`。当前两个窗口
-（`WatchlistScreen`/`DetailScreen`）都已确认干净，没有 Material 依赖——后续每次改动前后都要重新 grep 一遍
+（`WatchlistHost`/`DetailScreen`）都已确认干净，没有 Material 依赖——后续每次改动前后都要重新 grep 一遍
 确认没有引入。
 
 ## 详情窗口验证（`spatial-design-first-build` 门禁 B，2026-08-10）
@@ -568,8 +616,9 @@ trap '"$LOCK" release "$OWNER" emulator-5554 >/dev/null 2>&1' EXIT INT TERM
 - 已验证：`./gradlew assembleDebug` / `installDebug` 成功，`adb shell am start -n
   tech.illusion.stockquote/.platform.LaunchActivity` 能正常启动，截图确认渲染正常（见 `./artifacts/`：
   `watchlist_default.png` 只读态、`watchlist_editmode.png` 编辑态+涨跌幅排序中、`query_screen.png` 查询子
-  视图、`persistence_verified.png` 验证自选股变更能跨进程重启存活——前三张是套用"素雅"自定义配色之后重新截
-  的，颜色以这几张为准）。
+  视图、`persistence_verified.png` 验证自选股变更能跨进程重启存活）。**注意这批截图全部是契约 v5 改版
+  之前的**：配色还是旧的"素雅"暖纸风，左栏还有星标、查询还是整窗接管，只能当历史记录看，不能拿来判断
+  当前 UI。v5 之后还没有任何截图证据。
 - **验证"数据能不能跨重启存活"不能只靠 `am force-stop` + 重新 `am start`**——同一次 `adb install` 之后如果
   只是杀进程重开，看到状态还在，不能排除是因为 `SharedPreferences` 从来没真的落盘、只是内存里的单例对象碰巧
   没被系统真的回收。这次验证特意多做一步：改完状态之后先把触发变更的临时代码从源码里删掉、重新编译、
@@ -585,7 +634,7 @@ trap '"$LOCK" release "$OWNER" emulator-5554 >/dev/null 2>&1' EXIT INT TERM
   `foundation-layout`）；显式 import 顶层 `weight` 函数会解析到一个和当前 `RowScope`/`ColumnScope` 不匹配的
   版本，报 `Cannot access 'val RowColumnParentData?.weight: Float': it is internal in file`。直接在
   `Row {}`/`Column {}` 内容 lambda 里写 `Modifier.weight(1f)`，靠隐式 `RowScope`/`ColumnScope` receiver 成员
-  解析，不要加显式 import——这样才能编译通过（已在 `WatchlistScreen.kt` 里这样用）。
+  解析，不要加显式 import——这样才能编译通过（`WatchlistHost.kt` 里的 `DetailPane` 就是这样用的）。
 - **本机同时装了多个 PICO 模拟器 AVD（`Pico_Emulator_0_13` 和 `Pico_Emulator_6_0`），`adb`/`emulator-5554`
   这个端口号会在两者之间跳**——这次会话里 `emulator-5554` 一度从 `Pico_Emulator_0_13`（本项目
   spatialBom 0.13.3 对应的那个）变成了 `Pico_Emulator_6_0`，导致重新安装/启动时报
@@ -610,7 +659,7 @@ trap '"$LOCK" release "$OWNER" emulator-5554 >/dev/null 2>&1' EXIT INT TERM
   tap 坐标可靠得多，缺点是每次只能验证一条路径，别忘了验证完改回去（这次已确认改回，`grep "TEMP
   verification"` 应该找不到任何结果）。**用这个手法验证"数据持久化"类需求时要格外小心**：临时触发变更的
   `LaunchedEffect(Unit)` 只会在每次新的 Composition 创建时跑一次——如果不删掉这段代码就直接"杀进程重开"来看
-  变更是否还在，它会在重开时再跑一次，非幂等的操作（比如 `toggleStar`）会被再触发一次而悄悄撤销，看起来像是
+  变更是否还在，它会在重开时再跑一次，非幂等的操作（比如"移除某一只自选"）会被再跑一遍，看起来像是
   "持久化失败"，其实是测试代码自己把状态改回去了。正确顺序是：先带着临时代码跑一次触发变更→截图确认→**把临时
   代码删掉**→重新编译安装→再重启验证，这样第二次重启时已经没有代码会再改动状态了。
 - **应用窗口在 Shared Space 里的摆放位置有时会"飘出"固定截图摄像机的取景范围**——即使
@@ -661,10 +710,30 @@ trap '"$LOCK" release "$OWNER" emulator-5554 >/dev/null 2>&1' EXIT INT TERM
 11. **三项待你决策的产品问题**：详情窗口能不能靠系统 caption bar 关掉（关系到要不要把关闭按钮加回来）、
     独立窗口的 640×480dp 要不要改大、10 个指标芯片要不要换行（后两条在主窗口右侧分栏区里都不成问题，
     那边约 680dp 宽）。见上面"详情窗口 v3 改版验证"。
-12. `QueryScreen` 的 `clickable()` 缺 SpatialUI 要求的 `LocalIndication.current` + 共享
-    `controllerHapticFeedback`，`verify-design-style.sh` 还报 1 个 R6 error。`WatchlistScreen` 那一处已在
-    v2 改造里顺带修掉，照 `WatchlistRow` 的写法改即可。
+12. **搜索结果行的 `clickable()` 仍缺 SpatialUI 要求的 `LocalIndication.current` + 共享
+    `controllerHapticFeedback`**——这条问题跟着代码从已删除的 `QueryScreen` 搬到了 `SearchPane.kt` 的
+    `ResultRow`，`verify-design-style.sh` 大概率还是会报 1 个 R6 error。自选列表行那一处已在 v2 改造里
+    顺带修掉了，照 `WatchlistPane.kt` 里 `WatchlistRow` 的写法改即可。
 13. 语音控制——第一步是先验证语音识别引擎的技术路径（见上面"语音"小节的 ⚠️），别直接假设某个 API 存在。
+14. **契约 v5「同花顺」改版（2026-08-24）已实现完毕，只欠一次门禁 B 截图验证。** 这一轮换掉了上面若干条
+    v2 时代的设计决策，接手前先认清现状，别按旧假设施工：
+    - **配色**：旧的"素雅"暖纸风 + 系统毛玻璃 → 深色不透明的"同花顺"盘面（`fillPrimary 0xFF0F1318` 系
+      + 琥珀 `interaction`），两个窗口的 `materialbackground`/`enableMaterialBackground 都关成 false`，
+      各自根部铺一层不透明 `fillPrimary`。见上面"「同花顺」深色不透明盘面配色"那一节。
+    - **搜索/加删**：整窗接管的 `QueryScreen` → 只接管左栏的 `SearchPane`；"选中行才冒出加入按钮" →
+      行尾一颗 `Membership` 状态机驱动的四态钮 `MembershipToggle`（＋/◌/✓/!），状态由
+      `resolveMembership(inWatchlist, pending)` 单一推导。
+    - **移除/加入**：二次确认 `AlertDialog` → 即时执行 + 5 秒撤销条 `UndoBar`，**加和删都有**。
+    - **排序**：不再被编辑模式门住，表头随时可点；编辑模式只剩行尾 `✕`。
+    - **星标**：`Stock.star` / `StockRepository.toggleStar` / 行 `leadingContent` 的星标钮 /
+      `WatchlistLocalStore` 的加星持久化**全部删除**，不要再加回来。
+    - **文件**：`WatchlistScreen.kt` / `QueryScreen.kt` 已不存在，拆成
+      `WatchlistHost.kt` / `WatchlistPane.kt` / `SearchPane.kt` / `MembershipToggle.kt`。
+    - ⚠️ **还欠什么**：这一轮**完全没有在设备或模拟器上跑过截图验证**（`./gradlew :app:assembleDebug` 和
+      `:app:testDebugUnitTest` 都是绿的，但那只证明能编译能过单测）。深色底到底够不够不透明、选中行的
+      `fillSecondary` 底 + 3dp 琥珀条在头显里看不看得出来、撤销条浮层会不会挡住列表最后一行、四态钮的
+      `Adding` 转环在真机上是否可见——**这些都还没有画面证据**。下一步就是按
+      `.spatialsdk/gate-b-verify.sh` 跑一轮门禁 B。
 
 建议用 `spatial-app-dev-workflow` 技能逐条实现以上任务（一次一个需求，构建→装→模拟器截图验证→修
 crash→下一条）。
@@ -715,7 +784,7 @@ crash→下一条）。
 | 位置 | 值 | 含义 |
 |---|---|---|
 | `AndroidManifest.xml` 的 `windowcontainer.defaultsize` | `1080x660` | 主窗口 |
-| `WatchlistScreen.kt` 的 `ListPaneWidth` | `400.dp` | 左侧列表栏 |
+| `WatchlistPane.kt` 的 `ListPaneWidth` | `400.dp` | 左侧列表栏 |
 | `Main.kt` 的 `DetailWindowWidth/Height` | `680.dp / 660.dp` | 独立详情窗口 = (1080−400) × 主窗口高 |
 
 ## 多个详情窗口靠 tag，不靠多声明 container

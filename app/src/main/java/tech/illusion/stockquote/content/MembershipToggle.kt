@@ -26,6 +26,12 @@ private val ToggleSize = 40.dp
 /**
  * 加/删自选的唯一入口：一颗按钮承担全部四种状态（契约 v5 §5.4）。
  *
+ * ⚠️ **调用方必须用 `key(membership) { MembershipToggle(...) }` 包一层**，理由同 [UndoBar] 的警告：
+ * SDK 的可点组件会保留**首次**传入的 lambda（`pico-sdk-compose-pitfalls` 陷阱 1），而下面 `onClick`
+ * 里的 `when (membership)` 分支读的正是那个被保留下来的旧值——刚加完自选再点 ✓，会又走回 `onAdd()`
+ * （被 `addRemote` 的早退守卫吃掉，表现为「点了没反应」）。换 key 强制换节点是唯一可靠的解法：
+ * membership 每次真的变化都重建按钮节点，新节点绑定的就是新 lambda。
+ *
  * 用 `IconButton` 而不是自己拼 `Box + clickable`，是为了白拿 SDK 的 hover / 按压反馈 / 手柄震动
  * （`BasicIconButton` 内部已经接好）。**必须显式传 `shape = CircleShape`**：`IconButtonDefaults.DefaultShape`
  * 是 internal 引用不到，而自定义 `ButtonSize` 会让默认圆角悄悄丢失。

@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,6 +57,7 @@ internal fun SearchPane(
     onClose: () -> Unit,
     onSelect: (String) -> Unit,
     onRemoved: (RemovedSnapshot) -> Unit,
+    onAdded: (code: String, name: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var query by remember { mutableStateOf("") }
@@ -90,6 +93,19 @@ internal fun SearchPane(
         } else {
             remoteResults = suggestions.filter { s -> localResults.none { it.code == s.code } }
         }
+    }
+
+    // 契约 v5 §5.3 第 ② 条：搜索词一变，那些不再出现在结果里的 code 的 Adding/Failed 残留必须一起清掉，
+    // 否则用户把搜索词改回来时会看到一个过期的红叹号 / 转圈。
+    LaunchedEffect(localResults, remoteResults) {
+        StockRepository.pruneOpStates((localResults.map { it.code } + remoteResults.map { it.code }).toSet())
+    }
+
+    // 契约 v5 §5.3 第 ③ 条：退出搜索态清掉全部 Adding/Failed 残留，否则下次进搜索会看到上次留下的红叹号。
+    // 这条保证挂在 SearchPane 自己身上，而不是调用方"取消"按钮的回调里：离开 composition 的路径不止那一条
+    // （Host 侧状态被别的分支改写、窗口销毁重建…），只挂在那一颗按钮上就会漏。
+    DisposableEffect(Unit) {
+        onDispose { StockRepository.clearOpStates() }
     }
 
     Column(modifier = modifier.padding(horizontal = 16.dp, vertical = 20.dp)) {
@@ -152,6 +168,12 @@ internal fun SearchPane(
             items(items = localResults, key = { it.code }) { stock ->
                 val code = stock.code
                 val change = stock.changePercent()
+                // 本地这条路径没有失败信号：code 本来就来自 StockRepository.universe，
+                // 而 NotAdded 又保证了它还不在自选里，addFromUniverse 必然成功，直接报撤销条。
+                val add: () -> Unit = {
+                    StockRepository.addFromUniverse(code)
+                    onAdded(code, stock.name)
+                }
                 ResultRow(
                     name = stock.name,
                     code = code,
@@ -161,9 +183,9 @@ internal fun SearchPane(
                     changeColor = if (change >= 0) StockUpColor else StockDownColor,
                     membership = StockRepository.membershipOf(code),
                     onSelect = { onSelect(code) },
-                    onAdd = { StockRepository.addFromUniverse(code) },
+                    onAdd = add,
                     onRemove = { StockRepository.remove(code)?.let(onRemoved) },
-                    onRetry = { StockRepository.addFromUniverse(code) },
+                    onRetry = add,
                 )
                 HorizontalDivider()
             }
@@ -180,7 +202,10 @@ internal fun SearchPane(
                 items(items = remoteResults, key = { "remote-${it.code}" }) { suggestion ->
                     val code = suggestion.code
                     val name = suggestion.name
-                    val add: () -> Unit = { scope.launch { StockRepository.addRemote(code, name) } }
+                    // 只有真的加成功才报撤销条：抓取失败（→ Failed）和并发重复点击被守卫挡下时都返回 false。
+                    val add: () -> Unit = {
+                        scope.launch { if (StockRepository.addRemote(code, name)) onAdded(code, name) }
+                    }
                     ResultRow(
                         name = name,
                         code = code,
@@ -242,12 +267,17 @@ private fun ResultRow(
                 if (change != null) {
                     Text(text = change, style = PicoTheme.typography.labelSmall, color = changeColor)
                 }
-                MembershipToggle(
-                    membership = membership,
-                    onAdd = onAdd,
-                    onRemove = onRemove,
-                    onRetry = onRetry,
-                )
+                // ⚠️ key(membership) 不能省，见 MembershipToggle 的 KDoc：SDK 的可点组件会保留首次
+                // 传入的 lambda，而 onClick 里 `when (membership)` 读的就是那个旧值。membership 是
+                // enum（每个分支是单例，相等性稳定），换 key 就等于在状态真的变化时强制换掉按钮节点。
+                key(membership) {
+                    MembershipToggle(
+                        membership = membership,
+                        onAdd = onAdd,
+                        onRemove = onRemove,
+                        onRetry = onRetry,
+                    )
+                }
             }
         },
     )
