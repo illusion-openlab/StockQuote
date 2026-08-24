@@ -12,7 +12,7 @@ import tech.illusion.stockquote.data.BollResult
 import tech.illusion.stockquote.data.Candle
 import tech.illusion.stockquote.data.simpleMovingAverage
 
-private val BollBandColor = Color(0xFF8F8577) // design-style: fixed-figma-color 素雅BOLL-暖灰
+private val BollBandColor = Color(0xFF8E96A3) // design-style: fixed-figma-color 盘面BOLL-冷灰
 
 /**
  * Which overlays the price chart should draw. Volume lives in its own panel now (contract v3 §1).

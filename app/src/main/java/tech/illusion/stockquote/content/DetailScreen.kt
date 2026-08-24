@@ -487,8 +487,8 @@ fun DetailScreen(code: String?, headerEndInset: Dp = 0.dp) {
             SubPanel(
                 title = "MACD（12,26,9）",
                 legend = listOf(
-                    LegendEntry("DIFF", formatPrice(macd.diff[valueIndex]), PicoTheme.colorScheme.interaction),
-                    LegendEntry("DEA", formatPrice(macd.signal[valueIndex]), PicoTheme.colorScheme.alert),
+                    LegendEntry("DIFF", formatPrice(macd.diff[valueIndex]), MacdDiffColor),
+                    LegendEntry("DEA", formatPrice(macd.signal[valueIndex]), MacdSignalColor),
                     LegendEntry("MACD", formatPrice(histogram), if (histogram >= 0) StockUpColor else StockDownColor),
                 ),
             ) {
@@ -496,8 +496,8 @@ fun DetailScreen(code: String?, headerEndInset: Dp = 0.dp) {
                     macd = macd,
                     upColor = StockUpColor,
                     downColor = StockDownColor,
-                    diffColor = PicoTheme.colorScheme.interaction,
-                    signalColor = PicoTheme.colorScheme.alert,
+                    diffColor = MacdDiffColor,
+                    signalColor = MacdSignalColor,
                     selectedIndex = selectedIndex,
                     modifier = Modifier.fillMaxWidth().height(72.dp),
                 )

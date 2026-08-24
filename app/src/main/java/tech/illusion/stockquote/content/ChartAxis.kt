@@ -47,4 +47,4 @@ data class ChartAxis(val padLeft: Float, val padRight: Float, val slot: Float, v
 
 /** 十字光标线色。固定色，不是主题语义角色——它要在主图和四个副图里保持完全一致的视觉重量。 */
 val CrosshairColor: androidx.compose.ui.graphics.Color =
-    androidx.compose.ui.graphics.Color(0x8C6E6A63) // design-style: fixed-figma-color 素雅十字线-半透暖灰
+    androidx.compose.ui.graphics.Color(0xB38B97A6) // design-style: fixed-figma-color 盘面十字线-70%冷灰
