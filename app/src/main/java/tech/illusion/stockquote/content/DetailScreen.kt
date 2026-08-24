@@ -697,7 +697,7 @@ private fun SubPanel(title: String, legend: List<LegendEntry>, content: @Composa
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(text = title, style = PicoTheme.typography.labelSmall, color = PicoTheme.colorScheme.labelQuaternary)
+            Text(text = title, style = PicoTheme.typography.labelSmall, color = PicoTheme.colorScheme.labelTertiary)
             LegendStrip(legend)
         }
         Spacer(modifier = Modifier.height(4.dp))
@@ -705,23 +705,45 @@ private fun SubPanel(title: String, legend: List<LegendEntry>, content: @Composa
     }
 }
 
+/**
+ * 基本参数网格：实色格子 + 1dp 缝（契约 v5 §7）。
+ *
+ * 旧版是裸的 Row/Column、无背景、标签用 labelQuaternary——在毛玻璃上糊成一片，这正是用户报的
+ * "信息面板颜色可读性不强"。现在每格自己有 fillTertiary 底，格间靠 dividerLine 的缝分开，
+ * 标签提到 labelTertiary、数值提到 labelPrimary。
+ *
+ * 缝是用外层 background(dividerLine) + 格间 1dp 间距露出来的，不是画 1dp 的线：
+ * 画线要处理首尾行/列的边界，露底不用。
+ */
 @Composable
 private fun ParamGrid(rows: List<List<ParamCell>>) {
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(PicoTheme.colorScheme.dividerLine, RoundedCornerShape(8.dp))
+            .padding(1.dp),
+        verticalArrangement = Arrangement.spacedBy(1.dp),
+    ) {
         rows.forEach { row ->
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
                 row.forEach { cell ->
                     // Modifier.weight 靠 RowScope 隐式 receiver 解析，不要显式 import（见 AGENTS.md 的 classpath 坑）
-                    Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(PicoTheme.colorScheme.fillTertiary)
+                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
                         Text(
                             text = cell.label,
                             style = PicoTheme.typography.labelSmall,
-                            color = PicoTheme.colorScheme.labelQuaternary,
+                            color = PicoTheme.colorScheme.labelTertiary,
                         )
                         Text(
                             text = cell.value,
                             style = PicoTheme.typography.labelSmall,
-                            color = cell.color ?: PicoTheme.colorScheme.labelSecondary,
+                            color = cell.color ?: PicoTheme.colorScheme.labelPrimary,
                         )
                     }
                 }
