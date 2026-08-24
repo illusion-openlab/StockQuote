@@ -16,7 +16,7 @@ import kotlinx.coroutines.withContext
  * Market data (`universe`/`watchlist` prices) comes from [StockDataRepository] (Eastmoney/Sina, see
  * design doc §6/§7); the literals below are only the seed shown before the first successful fetch,
  * or the permanent fallback for any stock neither free source ever returns. Watchlist
- * membership/star/order is separately real: persisted through [WatchlistLocalStore].
+ * membership/order is separately real: persisted through [WatchlistLocalStore].
  *
  * Kept as a process-wide singleton backed by Compose snapshot state (not a Flow — no extra
  * coroutines dependency needed) so the detail WindowContainer (separate Activity, same process)
@@ -44,7 +44,6 @@ object StockRepository {
     )
 
     private val starterCodes = setOf("600519", "600036", "300750", "601318", "000858", "002594")
-    private val starredCodes = setOf("600519", "300750", "002594")
 
     private var _universe by mutableStateOf(universeSeed)
 
@@ -56,7 +55,7 @@ object StockRepository {
 
     private fun defaultWatchlist(): List<Stock> =
         _universe.filter { it.code in starterCodes }
-            .map { it.copy(star = it.code in starredCodes, orderIndex = orderCounter++) }
+            .map { it.copy(orderIndex = orderCounter++) }
 
     private var _watchlist by mutableStateOf(defaultWatchlist())
 
@@ -68,10 +67,9 @@ object StockRepository {
     fun init(context: Context) {
         WatchlistLocalStore.init(context)
         val savedCodes = WatchlistLocalStore.loadCodesInOrder() ?: return // first run: keep the default seed
-        val savedStars = WatchlistLocalStore.loadStarredCodes()
         orderCounter = 0
         _watchlist = savedCodes.mapNotNull { code -> _universe.find { it.code == code } }
-            .map { it.copy(star = it.code in savedStars, orderIndex = orderCounter++) }
+            .map { it.copy(orderIndex = orderCounter++) }
     }
 
     /**
@@ -222,21 +220,46 @@ object StockRepository {
     }
 
     private fun persist() {
-        WatchlistLocalStore.save(
-            codesInOrder = _watchlist.sortedBy { it.orderIndex }.map { it.code },
-            starredCodes = _watchlist.filter { it.star }.map { it.code }.toSet(),
-        )
+        WatchlistLocalStore.save(_watchlist.sortedBy { it.orderIndex }.map { it.code })
     }
 
     fun isInWatchlist(code: String): Boolean = _watchlist.any { it.code == code }
 
-    fun toggleStar(code: String) {
-        _watchlist = _watchlist.map { if (it.code == code) it.copy(star = !it.star) else it }
-        persist()
+    /**
+     * 正在飞 / 已失败的加自选操作，按 code 独立（契约 v5 §5.2）。
+     *
+     * `Added` **不进这张表**——它由 `_watchlist` 推导（见 [resolveMembership]）。把 Added 也塞进来
+     * 就会出现两个真相，正是旧代码 `QueryScreen.addingCode` 与 `isInWatchlist` 不同源的老毛病。
+     */
+    private val _opStates = mutableStateMapOf<String, Membership>()
+
+    /** 搜索列表和自选列表都读这个函数，不再各算各的。 */
+    fun membershipOf(code: String): Membership = resolveMembership(isInWatchlist(code), _opStates[code])
+
+    /**
+     * 退出搜索态时调用：清掉所有 Adding/Failed 残留（契约 v5 §5.3 的第 ③ 条清除时机）。
+     * 不清的话下次进搜索会看到上次留下的红叹号。
+     */
+    fun clearOpStates() {
+        _opStates.clear()
     }
 
-    fun remove(code: String) {
+    /**
+     * 移除自选，返回撤销所需的快照（没这只股票则返回 null）。
+     *
+     * 返回快照而不是 Unit：契约 v5 §6 用"即时移除 + 5 秒撤销条"取代了确认弹窗，撤销要能按**原位**
+     * 插回，所以移除的这一刻就得把 orderIndex 一起带出去——之后 `_watchlist` 里已经查不到它了。
+     */
+    fun remove(code: String): RemovedSnapshot? {
+        val victim = _watchlist.find { it.code == code } ?: return null
         _watchlist = _watchlist.filterNot { it.code == code }
+        persist()
+        return RemovedSnapshot(stock = victim, orderIndex = victim.orderIndex)
+    }
+
+    /** 撤销一次 [remove]：按原 orderIndex 插回。重复调用是幂等的。 */
+    fun restore(snapshot: RemovedSnapshot) {
+        _watchlist = restoreRemoved(_watchlist, snapshot)
         persist()
     }
 
@@ -257,7 +280,7 @@ object StockRepository {
     fun addFromUniverse(code: String) {
         if (isInWatchlist(code)) return
         val item = _universe.find { it.code == code } ?: return
-        _watchlist = _watchlist + item.copy(star = false, orderIndex = orderCounter++)
+        _watchlist = _watchlist + item.copy(orderIndex = orderCounter++)
         persist()
     }
 
@@ -271,15 +294,23 @@ object StockRepository {
     suspend fun addRemote(code: String, name: String): Boolean {
         if (isInWatchlist(code)) return true
         _universe.find { it.code == code }?.let { existing ->
-            _watchlist = _watchlist + existing.copy(star = false, orderIndex = orderCounter++)
+            _watchlist = _watchlist + existing.copy(orderIndex = orderCounter++)
+            _opStates.remove(code)
             persist()
             return true
         }
-        val remote = StockDataRepository.fetchHistory(code, days = 500) ?: return false
-        if (remote.closes.size < 2) return false
+        _opStates[code] = Membership.Adding
+        val remote = StockDataRepository.fetchHistory(code, days = 500)
+        // 失败一律回滚成 Failed，绝不留一条 hist 不足 2 个点的空壳自选：Stock.price()/changePercent()
+        // 全项目都假设至少 2 个点，行一进 composition 就会崩。
+        if (remote == null || remote.closes.size < 2) {
+            _opStates[code] = Membership.Failed
+            return false
+        }
         val stock = Stock(code = code, name = name, hist = remote.closes, candles = remote.candles, snapshot = remote.snapshot)
         _universe = _universe + stock
-        _watchlist = _watchlist + stock.copy(star = false, orderIndex = orderCounter++)
+        _watchlist = _watchlist + stock.copy(orderIndex = orderCounter++)
+        _opStates.remove(code)
         persist()
         return true
     }

@@ -42,7 +42,6 @@ import com.pico.spatial.ui.design.ListItemDefaults
 import com.pico.spatial.ui.design.PicoTheme
 import com.pico.spatial.ui.design.Text
 import com.pico.spatial.ui.design.ToggleButton
-import com.pico.spatial.ui.design.ToggleIconButton
 import com.pico.spatial.ui.design.ToggleableChip
 import com.pico.spatial.ui.design.VerticalDivider
 import com.pico.spatial.ui.design.menu.Menu
@@ -371,7 +370,6 @@ private fun WatchlistPane(
                         onSelect = { onSelect(code) },
                         onLongPress = { menuForCode = code },
                         onDismissMenu = { menuForCode = null },
-                        onToggleStar = { StockRepository.toggleStar(code) },
                         onDeleteRequest = { onRemoveRequest(code) },
                         onOpenInNewWindow = { onOpenInNewWindow(code) },
                         onPinToTop = { onPinToTop(code) },
@@ -412,7 +410,6 @@ private fun WatchlistRow(
     onSelect: () -> Unit,
     onLongPress: () -> Unit,
     onDismissMenu: () -> Unit,
-    onToggleStar: () -> Unit,
     onDeleteRequest: () -> Unit,
     onOpenInNewWindow: () -> Unit,
     onPinToTop: () -> Unit,
@@ -471,11 +468,6 @@ private fun WatchlistRow(
             // 设计稿 .row.selected 的圆角是 10dp；ListItem 默认 shape 是 RadiusLarge(16dp)，
             // 而且 ListItemDefaults.shape 是 internal 引用不到，所以显式传自己的。
             shape = RoundedCornerShape(10.dp),
-            leadingContent = {
-                ToggleIconButton(checked = stock.star, onCheckedChange = { onToggleStar() }) {
-                    Text(if (stock.star) "★" else "☆")
-                }
-            },
             headlineContent = {
                 Text(
                     text = stock.name,

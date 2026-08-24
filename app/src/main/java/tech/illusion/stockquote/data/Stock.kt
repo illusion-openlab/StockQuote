@@ -16,7 +16,6 @@ data class Stock(
     val hist: List<Double>,
     val candles: List<Candle> = emptyList(),
     val snapshot: QuoteSnapshot? = null,
-    val star: Boolean = false,
     val orderIndex: Int = 0,
 )
 
