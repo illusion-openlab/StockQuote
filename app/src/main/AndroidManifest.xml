@@ -85,10 +85,12 @@
             <!-- Material background of the WindowContainer
                 "0": false, no material background
                 "1": true, uses Material.Regular as the background (default)
-             -->
+                契约 v5 §1：改 0（去毛玻璃），面板底色由应用自己画（Main.kt 根部铺 fillPrimary）。
+                DefaultWindowContainer 只收 content、没有 enableMaterialBackground 参数
+                （foundation/dsl/WindowContainer.kt:66），主窗口只能在这里改。 -->
             <meta-data
                 android:name="pico.spatial.windowcontainer.materialbackground"
-                android:value="1"/>
+                android:value="0"/>
         </activity>
 
         <meta-data android:name="icon.3d.list" android:resource="@array/icon_3d_list" />

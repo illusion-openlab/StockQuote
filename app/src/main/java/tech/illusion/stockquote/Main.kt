@@ -1,5 +1,9 @@
 package tech.illusion.stockquote
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.pico.spatial.ui.design.PicoTheme
 import com.pico.spatial.ui.foundation.dsl.DefaultWindowContainer
@@ -45,18 +49,28 @@ fun mainApp(scope: SpatialAppScope) =
     with(scope) {
         DefaultWindowContainer {
             PicoTheme(colorScheme = StockQuoteColorScheme) {
-                WatchlistHost()
+                // 契约 v5 §1：manifest 已把 materialbackground 关成 0，窗口自己不再有毛玻璃底，
+                // 所以必须在根部铺一层不透明底色，否则整块面板是全透的。
+                Box(modifier = Modifier.fillMaxSize().background(PicoTheme.colorScheme.fillPrimary)) {
+                    WatchlistHost()
+                }
             }
         }
         WindowContainer(
             id = DETAIL_WINDOW_ID,
             form = Form.Planar,
             defaultSize = WindowContainerSize(width = DetailWindowWidth, height = DetailWindowHeight),
+            // DSL 声明的窗口有这个参数（foundation/dsl/WindowContainer.kt:105）；主窗口没有，
+            // 只能走 manifest。两处写法不一样，别以为有统一 API。
+            enableMaterialBackground = false,
         ) {
+            val code = bundle?.getString("code")
             PicoTheme(colorScheme = StockQuoteColorScheme) {
-                // 窗口壳层负责把 bundle 解成 code；DetailScreen 本身不认识 Bundle，这样主窗口分栏区
-                // 才能用同一个 Composable（详情页设计统一，见 DetailScreen 的 KDoc）。
-                DetailScreen(code = bundle?.getString("code"))
+                Box(modifier = Modifier.fillMaxSize().background(PicoTheme.colorScheme.fillPrimary)) {
+                    // 窗口壳层负责把 bundle 解成 code；DetailScreen 本身不认识 Bundle，这样主窗口分栏区
+                    // 才能用同一个 Composable（详情页设计统一，见 DetailScreen 的 KDoc）。
+                    DetailScreen(code = code)
+                }
             }
         }
     }
