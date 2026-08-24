@@ -248,7 +248,7 @@ private fun DetailPane(
     if (code == null) {
         Box(modifier = modifier, contentAlignment = Alignment.Center) {
             Text(
-                text = "暂无自选股 —— 用左上角的查询加入",
+                text = "还没有自选股，点左栏搜索框添加",
                 style = PicoTheme.typography.bodyMedium,
                 color = PicoTheme.colorScheme.labelTertiary,
             )

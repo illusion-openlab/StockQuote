@@ -83,46 +83,49 @@ internal fun WatchlistPane(
     }
 
     Column(modifier = modifier.padding(horizontal = 16.dp, vertical = 20.dp)) {
-        Text(
-            text = "自选股列表",
-            style = PicoTheme.typography.titleLarge,
-            color = PicoTheme.colorScheme.labelPrimary,
-        )
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // 编辑 → 搜索栏（顶部编辑栏，只有这两个元素）
         Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            Text(
+                text = "自选股",
+                style = PicoTheme.typography.titleLarge,
+                color = PicoTheme.colorScheme.labelPrimary,
+            )
             ToggleButton(checked = editMode, onCheckedChange = { editMode = it }) {
                 Text(if (editMode) "完成" else "编辑")
-            }
-            Button(
-                onClick = onOpenSearch,
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = PicoTheme.colorScheme.fillTertiary),
-            ) {
-                Text("🔍  查股票…", color = PicoTheme.colorScheme.labelTertiary)
             }
         }
         Spacer(modifier = Modifier.height(14.dp))
 
-        // 表头：只有进入编辑模式才能点击排序
+        // 常驻搜索入口：点了整个左栏切到 SearchPane（右栏详情不动）。
+        // 这里刻意用 Button 假装成搜索框，而不是放一个真 SearchField：真输入框会把系统 IME
+        // 拉起来占掉半个视野，而这一步用户只是想"进搜索"，还没开始打字。
+        Button(
+            onClick = onOpenSearch,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = PicoTheme.colorScheme.fillTertiary),
+        ) {
+            Text("🔍  代码 / 名称", color = PicoTheme.colorScheme.labelTertiary)
+        }
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // 表头：排序不再受编辑模式限制，随时可点击
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            SortHeader("股票/代码", SortKey.NAME, sortKey, sortAscending, editMode) { onToggleSort(SortKey.NAME) }
-            SortHeader("价格", SortKey.PRICE, sortKey, sortAscending, editMode) { onToggleSort(SortKey.PRICE) }
-            SortHeader("涨跌幅", SortKey.CHANGE, sortKey, sortAscending, editMode) { onToggleSort(SortKey.CHANGE) }
+            SortHeader("名称", SortKey.NAME, sortKey, sortAscending) { onToggleSort(SortKey.NAME) }
+            SortHeader("最新价", SortKey.PRICE, sortKey, sortAscending) { onToggleSort(SortKey.PRICE) }
+            SortHeader("涨跌幅", SortKey.CHANGE, sortKey, sortAscending) { onToggleSort(SortKey.CHANGE) }
         }
         HorizontalDivider()
 
         if (stocks.isEmpty()) {
             Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
                 Text(
-                    text = "暂无自选股，点击上方查询加入",
+                    text = "还没有自选股，点上方搜索框添加",
                     style = PicoTheme.typography.bodyMedium,
                     color = PicoTheme.colorScheme.labelTertiary,
                     textAlign = TextAlign.Center,
@@ -159,11 +162,10 @@ internal fun SortHeader(
     key: SortKey,
     activeKey: SortKey?,
     ascending: Boolean,
-    enabled: Boolean,
     onClick: () -> Unit,
 ) {
     val arrow = if (activeKey == key) (if (ascending) " ▲" else " ▼") else ""
-    Link(onClick = onClick, enabled = enabled) {
+    Link(onClick = onClick) {
         Text(
             text = label + arrow,
             style = PicoTheme.typography.labelMedium,
@@ -250,7 +252,7 @@ internal fun WatchlistRow(
                 Text(
                     text = stock.code,
                     style = PicoTheme.typography.bodySmall,
-                    color = PicoTheme.colorScheme.labelTertiary,
+                    color = PicoTheme.colorScheme.labelQuaternary,
                 )
             },
             trailingContent = {
