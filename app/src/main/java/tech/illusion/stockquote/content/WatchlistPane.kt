@@ -58,7 +58,7 @@ internal val ListPaneWidth = 400.dp
 internal fun WatchlistPane(
     selectedCode: String?,
     onSelect: (String) -> Unit,
-    onOpenQuery: () -> Unit,
+    onOpenSearch: () -> Unit,
     onOpenInNewWindow: (String) -> Unit,
     onPinToTop: (String) -> Unit,
     onRemoveRequest: (String) -> Unit,
@@ -99,7 +99,7 @@ internal fun WatchlistPane(
                 Text(if (editMode) "完成" else "编辑")
             }
             Button(
-                onClick = onOpenQuery,
+                onClick = onOpenSearch,
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(containerColor = PicoTheme.colorScheme.fillTertiary),
             ) {

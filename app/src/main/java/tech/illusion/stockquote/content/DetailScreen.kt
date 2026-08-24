@@ -86,7 +86,8 @@ private val SubPanelChips: List<Pair<String, String>> =
 /** 图表区内边距。手势挂在 padding 之外，所以点击坐标要减掉它才是画布局部坐标。 */
 private val ChartInnerPadding = 8.dp
 
-private fun exchangeSuffix(code: String): String = when (code.firstOrNull()) {
+/** 交易所后缀（沪/深），`DetailScreen` 和 `SearchPane` 共用，不要各写一份。 */
+internal fun exchangeSuffix(code: String): String = when (code.firstOrNull()) {
     '6' -> " · 沪"
     '0', '3' -> " · 深"
     else -> ""

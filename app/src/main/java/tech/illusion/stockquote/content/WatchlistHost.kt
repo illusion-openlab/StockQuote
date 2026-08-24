@@ -1,8 +1,9 @@
 package tech.illusion.stockquote.content
 
 import android.os.Bundle
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,28 +12,34 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.pico.spatial.ui.design.Button
-import com.pico.spatial.ui.design.ButtonDefaults
 import com.pico.spatial.ui.design.PicoTheme
 import com.pico.spatial.ui.design.Text
 import com.pico.spatial.ui.design.ToggleableChip
 import com.pico.spatial.ui.design.VerticalDivider
 import com.pico.spatial.ui.design.menu.Menu
 import com.pico.spatial.ui.design.menu.MenuItem
-import com.pico.spatial.ui.design.windows.AlertDialog
 import com.pico.spatial.ui.platform.containers.LocalSpatialNavigator
 import kotlinx.coroutines.delay
 import tech.illusion.stockquote.DETAIL_WINDOW_ID
 import tech.illusion.stockquote.detailWindowTag
+import tech.illusion.stockquote.data.RemovedSnapshot
 import tech.illusion.stockquote.data.StockRepository
 
 private const val QUOTE_POLL_INTERVAL_MS = 5000L
+
+/** 撤销条停留时长（契约 v5 §6）。 */
+private const val UNDO_TIMEOUT_MS = 5000L
+
+/** 一条待撤销的操作。`undo` 只捕获稳定引用（快照/code），不捕获会随轮询换实例的 `Stock`。 */
+private data class UndoRequest(val message: String, val undo: () -> Unit)
 
 /**
  * 主窗口入口。设计契约 v2：默认是**左右分栏**——左边自选股列表，右边选中个股的详情。
@@ -40,19 +47,22 @@ private const val QUOTE_POLL_INTERVAL_MS = 5000L
  * 详情区渲染的就是那份唯一的 [DetailScreen]（契约 v3 的完整版），不是轻量预览：v2 §1 第 3 条原本设计的
  * "预览只画 MA5/MA10、完整指标留给独立窗口"那套分级**已被用户 2026-08-11 的"详情页设计统一"裁决推翻**。
  *
- * 查询子视图仍然整窗接管（不是只替换左栏）——它自己的布局是按整窗宽度排的，塞进 400dp 会需要重排，
- * 而这不在 v2 的范围里。
+ * 查询子视图改为**只接管左栏**（契约 v5 §4）：右侧详情区在搜索期间原地不动，继续显示当前选中的股票，
+ * 不再是旧版那种整窗切换——加完股票退出搜索，刚加的那只就在原地列表里。
  */
 @Composable
 fun WatchlistHost() {
-    var showQuery by remember { mutableStateOf(false) }
+    var searchOpen by remember { mutableStateOf(false) }
     var selectedCode by remember { mutableStateOf<String?>(null) }
-    // 排序状态和删除确认都提到 Host 层：`置顶`/`移除` 现在有**两个**入口（列表行长按菜单、详情区右上角
-    // "更多"菜单），两边必须共用同一份排序状态和同一个确认弹窗，否则会出现"从详情区置顶不清排序"
-    // 或者"两个弹窗"这类不一致。
+    // 排序状态提到 Host 层：`置顶` 现在有**两个**入口（列表行长按菜单、详情区右上角"更多"菜单），
+    // 两边必须共用同一份排序状态，否则会出现"从详情区置顶不清排序"这类不一致。
     var sortKey by remember { mutableStateOf<SortKey?>(null) }
     var sortAscending by remember { mutableStateOf(false) }
-    var pendingDeleteCode by remember { mutableStateOf<String?>(null) }
+    // 当前待展示的撤销条；null 表示没有。
+    var undo by remember { mutableStateOf<UndoRequest?>(null) }
+    // 每次新的可撤销操作 +1。它同时是撤销条的 key（强制换节点，见 UndoBar 的 KDoc）
+    // 和倒计时的重启信号——新的一条顶掉旧的，旧的直接落定。
+    var undoGeneration by remember { mutableIntStateOf(0) }
     val navigator = LocalSpatialNavigator.current
 
     // 一次性拉全量历史（K 线用）；随后按设计文档 §6/§7 的节奏轮询自选股最新报价。
@@ -97,58 +107,85 @@ fun WatchlistHost() {
         }
     }
 
-    if (showQuery) {
-        QueryScreen(onBack = { showQuery = false })
-    } else {
-        val watchlist = StockRepository.watchlist
-        // 默认选中第一行（对齐 v2 稿的"默认选中第一项"）。写成派生值而不是 LaunchedEffect 纠正：
-        // 选中的股票被移除后会自动落回第一行，不需要额外的同步逻辑，也不会出现指向已删除代码的空窗。
-        val activeCode = watchlist.firstOrNull { it.code == selectedCode }?.code
-            ?: watchlist.firstOrNull()?.code
-
-        Row(modifier = Modifier.fillMaxSize()) {
-            WatchlistPane(
-                selectedCode = activeCode,
-                onSelect = { selectedCode = it },
-                onOpenQuery = { showQuery = true },
-                onOpenInNewWindow = openInNewWindow,
-                onPinToTop = pinToTop,
-                onRemoveRequest = { pendingDeleteCode = it },
-                sortKey = sortKey,
-                sortAscending = sortAscending,
-                onToggleSort = ::toggleSort,
-                modifier = Modifier.width(ListPaneWidth).fillMaxHeight(),
-            )
-            VerticalDivider(modifier = Modifier.fillMaxHeight())
-            DetailPane(
-                code = activeCode,
-                onOpenInNewWindow = openInNewWindow,
-                onPinToTop = pinToTop,
-                onRemoveRequest = { pendingDeleteCode = it },
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-            )
-        }
+    fun offerUndo(message: String, action: () -> Unit) {
+        undo = UndoRequest(message, action)
+        undoGeneration += 1
     }
 
-    // 破坏性操作走二次确认，两个入口共用这一个弹窗（契约 v2 §1-5）
-    val toDelete = pendingDeleteCode?.let { c -> StockRepository.watchlist.find { it.code == c } }
-    if (toDelete != null) {
-        AlertDialog(
-            onDismissRequest = { pendingDeleteCode = null },
-            title = { Text("删除自选股") },
-            content = { Text("从自选股中删除 ${toDelete.name}（${toDelete.code}）？") },
-            buttons = {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(onClick = { pendingDeleteCode = null }) { Text("取消") }
-                    Button(
-                        onClick = {
-                            StockRepository.remove(toDelete.code)
-                            pendingDeleteCode = null
+    LaunchedEffect(undoGeneration) {
+        if (undo == null) return@LaunchedEffect
+        delay(UNDO_TIMEOUT_MS)
+        undo = null
+    }
+
+    // 契约 v5 §6：即时移除 + 5 秒撤销条，取代了旧版的二次确认弹窗。三个移除入口
+    // （搜索结果行尾钮、列表行"✕"、详情区"更多"菜单）都通过这一个回调汇入撤销条。
+    val onRemoved: (RemovedSnapshot) -> Unit = { snapshot ->
+        offerUndo("已移除「${snapshot.stock.name}」") { StockRepository.restore(snapshot) }
+    }
+
+    val watchlist = StockRepository.watchlist
+    // 默认选中第一行（对齐 v2 稿的"默认选中第一项"）。写成派生值而不是 LaunchedEffect 纠正：
+    // 选中的股票被移除后会自动落回第一行，不需要额外的同步逻辑，也不会出现指向已删除代码的空窗。
+    val activeCode = watchlist.firstOrNull { it.code == selectedCode }?.code
+        ?: watchlist.firstOrNull()?.code
+
+    Row(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .width(ListPaneWidth)
+                .fillMaxHeight()
+                .background(ListPaneBase),
+        ) {
+            // Modifier.weight 靠 ColumnScope 隐式 receiver 解析，不要显式 import
+            Box(modifier = Modifier.weight(1f)) {
+                if (searchOpen) {
+                    SearchPane(
+                        onClose = {
+                            searchOpen = false
+                            // 契约 v5 §5.3 第 ③ 条：退出搜索清掉 Adding/Failed 残留，
+                            // 否则下次进来会看到上次留下的红叹号。
+                            StockRepository.clearOpStates()
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = PicoTheme.colorScheme.error),
-                    ) { Text("删除") }
+                        onSelect = { selectedCode = it },
+                        onRemoved = onRemoved,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    WatchlistPane(
+                        selectedCode = activeCode,
+                        onSelect = { selectedCode = it },
+                        onOpenSearch = { searchOpen = true },
+                        onOpenInNewWindow = openInNewWindow,
+                        onPinToTop = pinToTop,
+                        onRemoveRequest = { code -> StockRepository.remove(code)?.let(onRemoved) },
+                        sortKey = sortKey,
+                        sortAscending = sortAscending,
+                        onToggleSort = ::toggleSort,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
-            },
+            }
+            undo?.let { request ->
+                key(undoGeneration) {
+                    UndoBar(
+                        message = request.message,
+                        onUndo = {
+                            request.undo()
+                            undo = null
+                        },
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                }
+            }
+        }
+        VerticalDivider(modifier = Modifier.fillMaxHeight())
+        DetailPane(
+            code = activeCode,
+            onOpenInNewWindow = openInNewWindow,
+            onPinToTop = pinToTop,
+            onRemoveRequest = { code -> StockRepository.remove(code)?.let(onRemoved) },
+            modifier = Modifier.weight(1f).fillMaxHeight(),
         )
     }
 }
@@ -182,7 +219,7 @@ internal fun StockActionMenu(
             title = { Text("✕  移除") },
             onClick = {
                 onDismiss()
-                // 破坏性操作走 Host 层的二次确认弹窗，不是无确认直接删
+                // 破坏性操作现在走即时移除 + Host 层的撤销条（契约 v5 §6），不再有二次确认弹窗。
                 onRemove()
             },
         )
