@@ -50,4 +50,12 @@ object StockDataRepository {
     /** 全市场名称/代码搜索，见 [SinaSource.suggest]。`null` = 请求失败，空列表 = 请求成功但无命中。 */
     suspend fun searchSuggestions(keyword: String): List<StockSuggestion>? =
         withContext(Dispatchers.IO) { SinaSource.suggest(keyword) }
+
+    /** 个股新闻，见 [EastmoneyNewsSource.fetchNews]。`null` = 请求失败，空列表 = 请求成功但无命中。 */
+    suspend fun fetchNews(code: String): List<StockNews>? =
+        withContext(Dispatchers.IO) {
+            EastmoneyNewsSource.fetchNews(code).also {
+                if (it == null) Log.w(TAG, "$code news: fetch failed") else Log.d(TAG, "$code news <- eastmoney (${it.size} 条)")
+            }
+        }
 }

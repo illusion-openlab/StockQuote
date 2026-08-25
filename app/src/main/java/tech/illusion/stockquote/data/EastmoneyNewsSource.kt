@@ -1,8 +1,11 @@
 package tech.illusion.stockquote.data
 
+import android.util.Log
+import org.json.JSONObject
 import java.net.URLEncoder
 
 private const val JsonpCallback = "jQuery_stockquote"
+private const val TAG = "EastmoneyNewsSource"
 
 /**
  * 个股新闻，走东财新闻搜索引擎的逆向接口（`search-api-web.eastmoney.com/search/jsonp`）——见设计文档
@@ -41,4 +44,29 @@ object EastmoneyNewsSource {
      */
     internal fun stripHighlightTags(text: String): String =
         text.replace("<em>", "").replace("</em>", "")
+
+    /** `null` = 请求或解析失败；空列表 = 请求成功但这只股票目前没有相关新闻命中。 */
+    fun fetchNews(code: String): List<StockNews>? {
+        val body = httpGet(buildNewsUrl(code), referer = "https://so.eastmoney.com/") ?: return null
+        val json = stripJsonpWrapper(body) ?: return null
+        return runCatching {
+            val root = JSONObject(json)
+            if (root.optInt("code") != 0) return@runCatching emptyList()
+            val result = root.optJSONObject("result") ?: return@runCatching emptyList()
+            val array = result.optJSONArray("cmsArticleWebOld") ?: return@runCatching emptyList()
+            (0 until array.length())
+                .mapNotNull { i -> array.optJSONObject(i)?.let(::parseNewsItem) }
+                .sortedByDescending { it.publicTime } // 接口的 sort=default 不是时间倒序，见 buildNewsUrl 的注释
+        }.onFailure { Log.w(TAG, "$code news: parse failed", it) }.getOrNull()
+    }
+
+    private fun parseNewsItem(item: JSONObject): StockNews? {
+        val title = item.optString("title").takeIf { it.isNotBlank() } ?: return null
+        return StockNews(
+            title = stripHighlightTags(title),
+            content = stripHighlightTags(item.optString("content")),
+            publicTime = item.optString("date"),
+            url = item.optString("url"),
+        )
+    }
 }
