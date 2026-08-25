@@ -791,38 +791,65 @@ private fun NewsPanel(
             .fillMaxHeight()
             .fillMaxWidth()
             .background(PicoTheme.colorScheme.fillPrimary)
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
+            .padding(16.dp),
     ) {
         val currentNews = selectedNews
         if (currentNews != null) {
-            NewsDetailScreen(news = currentNews, articleCache = articleCache, onBack = { selectedNews = null })
+            // 固定头：不随下面的正文一起滚动——用户 2026-08-25 反馈长文章滚动后"← 返回"被滚没了，够不到。
+            // 头和可滚动内容分成两段，Modifier.weight(1f) 必须直接写在这个 Column{} 字面量里，不能抽到
+            // 单独函数里靠隐式 ColumnScope receiver 解析（见 AGENTS.md 的 weight/classpath 坑那条）。
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { selectedNews = null }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text("←", style = PicoTheme.typography.titleMedium, color = PicoTheme.colorScheme.labelPrimary)
+                Text("返回", style = PicoTheme.typography.bodyMedium, color = PicoTheme.colorScheme.labelPrimary)
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                NewsDetailBody(news = currentNews, articleCache = articleCache)
+            }
         } else {
+            // 同样固定："资讯"标题不随列表滚动。
             Text("资讯", style = PicoTheme.typography.titleMedium, color = PicoTheme.colorScheme.labelPrimary)
             Spacer(modifier = Modifier.height(12.dp))
-            when {
-                cached != null && cached.isEmpty() -> Text(
-                    text = "暂无相关资讯",
-                    style = PicoTheme.typography.bodyMedium,
-                    color = PicoTheme.colorScheme.labelTertiary,
-                )
-                cached != null -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    cached.forEach { news -> NewsRow(news, onClick = { selectedNews = news }) }
-                }
-                loadFailed -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "资讯加载失败，请重试",
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                when {
+                    cached != null && cached.isEmpty() -> Text(
+                        text = "暂无相关资讯",
                         style = PicoTheme.typography.bodyMedium,
                         color = PicoTheme.colorScheme.labelTertiary,
                     )
-                    Button(onClick = { reloadToken++ }) { Text("重试") }
-                }
-                else -> Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    CircularProgressIndicator(progressSize = CircularProgressDefaults.circleProgressSize(18.dp))
-                    Text("加载中…", style = PicoTheme.typography.bodyMedium, color = PicoTheme.colorScheme.labelTertiary)
+                    cached != null -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        cached.forEach { news -> NewsRow(news, onClick = { selectedNews = news }) }
+                    }
+                    loadFailed -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "资讯加载失败，请重试",
+                            style = PicoTheme.typography.bodyMedium,
+                            color = PicoTheme.colorScheme.labelTertiary,
+                        )
+                        Button(onClick = { reloadToken++ }) { Text("重试") }
+                    }
+                    else -> Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        CircularProgressIndicator(progressSize = CircularProgressDefaults.circleProgressSize(18.dp))
+                        Text("加载中…", style = PicoTheme.typography.bodyMedium, color = PicoTheme.colorScheme.labelTertiary)
+                    }
                 }
             }
         }
@@ -848,18 +875,15 @@ private fun NewsRow(news: StockNews, onClick: () -> Unit) {
 }
 
 /**
- * 新闻详情页：`NewsRow` 点击后 push 进来的整屏，顶部「← 返回」pop 回列表（用户 2026-08-25 要求）。
+ * 新闻详情正文——不含「← 返回」头（那个是固定头，属于调用方 [NewsPanel]，见那边关于 weight/滚动拆分的
+ * 说明），只是 push 进详情态之后、可滚动区域里的内容本身。
  *
  * `news.content`（列表页搜索接口自带的摘要）先顶着立刻显示——它有时候只是搜索命中片段甚至是表格碎片
  * （用户反馈"只显示部分信息"就是这个），所以这里异步打 `news.url` 抓东财文章镜像页的正文全文，抓到就
  * 原地把显示内容换成全文；抓不到（网络失败/页面模板变了）就继续显示摘要，不弹错误——摘要好歹能看。
  */
 @Composable
-private fun NewsDetailScreen(
-    news: StockNews,
-    articleCache: SnapshotStateMap<String, String>,
-    onBack: () -> Unit,
-) {
+private fun NewsDetailBody(news: StockNews, articleCache: SnapshotStateMap<String, String>) {
     var fetchFailed by remember(news.url) { mutableStateOf(false) }
     LaunchedEffect(news.url) {
         if (news.url.isBlank() || articleCache.containsKey(news.url)) return@LaunchedEffect
@@ -869,18 +893,6 @@ private fun NewsDetailScreen(
     val fullContent = articleCache[news.url]
     val isFetchingFull = news.url.isNotBlank() && fullContent == null && !fetchFailed
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onBack)
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text("←", style = PicoTheme.typography.titleMedium, color = PicoTheme.colorScheme.labelPrimary)
-        Text("返回", style = PicoTheme.typography.bodyMedium, color = PicoTheme.colorScheme.labelPrimary)
-    }
-    Spacer(modifier = Modifier.height(12.dp))
     Text(news.title, style = PicoTheme.typography.titleMedium, color = PicoTheme.colorScheme.labelPrimary)
     Spacer(modifier = Modifier.height(4.dp))
     Text(news.publicTime, style = PicoTheme.typography.labelSmall, color = PicoTheme.colorScheme.labelQuaternary)
