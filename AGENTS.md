@@ -672,6 +672,55 @@ trap '"$LOCK" release "$OWNER" emulator-5554 >/dev/null 2>&1' EXIT INT TERM
   无关。遇到"焦点确认对了，截图还是空的"时，不要继续在 `force-stop`/`pm clear` 上反复试，直接重启模拟器更
   快。
 
+## 资讯面板（"资讯"按钮 + `Subwindow` 新闻列表，2026-08-25）
+
+`EastmoneyNewsSource.kt`（`StockNews` 模型 + URL/JSONP/高亮标签纯函数 + `fetchNews` 真实抓取）→
+`StockDataRepository.fetchNews` 包装 → `DetailScreen.kt` 的"资讯"`ToggleableChip` + 条件 `Subwindow` +
+`NewsPanel`/`NewsRow`，三个提交（`79a1daa`/`3a83e24`/`7b078b1`）分三步落地。
+
+- **数据源和设计文档原始假设不一致**：设计文档原来写的是 `so.eastmoney.com/news/s`，但那其实是一个 SPA
+  搜索页面（返回 HTML，不是 JSON），不能直接当接口打。写计划阶段用 curl 验证后确认真正的数据来自另一个
+  域名：`https://search-api-web.eastmoney.com/search/jsonp`（JSONP 包装，`cb=<callback>&param=<url
+  编码后的 JSON body>`）。`EastmoneyNewsSource.kt` 实现的是这个修正后的接口，不是文档字面写的那个 URL。
+- **接口的 `sort=default` 不是时间倒序**——curl 600519 实测过，一次真实返回里日期顺序是
+  08-15/08-21/08-21/08-24/08-21，完全是乱的。`EastmoneyNewsSource.fetchNews` 在客户端按 `publicTime`
+  做降序重排来补偿，这不是防御性瞎猜，是有 curl 证据支撑的硬需求。
+- **`Subwindow`/`SubwindowPlacement` 包路径和 `spatial-ui-ability` 技能的 bundled 参考不一致**：该技能的
+  `references/ability-augment.md` 写的是 `com.pico.spatial.ui.augment`，这对本项目锁定的 SDK 版本
+  （`gradle/libs.versions.toml` 里 `spatialBom = "0.13.3"`）是过期信息。解压 `design-0.13.3-sources.jar`
+  直接读 `Subwindow.kt` 源码确认的真实包路径是 `com.pico.spatial.ui.design.windows`，`DetailScreen.kt`
+  用的是这个修正后的 import。已经另开了一个任务去修那份技能参考（不在本仓库范围内）——这里只是记一笔，
+  免得以后哪个会话又照着 `ability-augment.md` 抄错包名踩同一个坑。
+- **模拟器验证做了什么（2026-08-25）**：
+  - `./gradlew assembleDebug` → BUILD SUCCESSFUL。
+  - 用本项目自己的 `.spatialsdk/gate-b-verify.sh`（设备锁安全的门禁 B 脚本，理由见上面"门禁 B 必须用
+    `.spatialsdk/gate-b-verify.sh`"那节）装机+启动到 `emulator-5554`，渲染等待用本项目已确定的 50 秒
+    （见上面"本机环境注意事项"里"12 只股票各 230 天日线"那条）。
+  - 第一轮截图前的 crash buffer 里有一条 `FORTIFY: pthread_mutex_lock called on a destroyed mutex`
+    SIGABRT，但时间戳比这次跑的时间早了大约 2 小时，且这轮的运行日志没有任何失败步骤。为消除歧义，
+    显式清空 crash buffer（`adb logcat -c`），原样重跑一遍 install→launch→等 50 秒→截图→stop：
+    crash buffer 回来是**完全空的**。结论：那条 crash 是这台共享模拟器上别的并发会话留下的陈旧记录
+    （本工作区的模拟器多会话共享，见上面"共享模拟器设备锁"一节），跟本功能无关，这次构建确认无崩溃。
+  - 截图确认"资讯 ▾"芯片渲染正确，位置在价格头部下方、今开/最高/最低网格上方，拍到的是**主窗口右侧
+    分栏里的 `DetailScreen` 实例**（自选列表 + 详情左右分栏，示例股票是中铁装配/300374）。这是真实的
+    视觉证据：芯片存在、和深色主题其余部分风格一致、没有和任何东西视觉冲突。
+  - **没验证**：芯片在**独立详情窗口**里的外观（这次只拍了主窗口分栏那一侧，独立窗口那条还是空的）。
+  - **没验证、也没法自动化验证**：真正的交互流程——点"资讯"、`Subwindow` 弹出、loading→有数据/空态的
+    切换、点某条新闻展开/收起、再点一次"资讯"关闭、切换股票时面板自动收起。本项目已有的一条硬限制
+    （见上面"`adb shell input swipe/tap` 送不进 spatial 面板"，K 线拖拽那次注入前后两张截图逐字节相同）
+    同样适用于这里：`adb` 注入的 2D 屏幕坐标对这套 spatial UI 不是可靠输入，自动化"点一下芯片"的实验
+    做出来也不能当真凭实据，所以**没有尝试**——这符合本项目一贯的做法：手势类交互流程如实标"未经自动化
+    验证"，不假装截图能证明点击生效。
+  - **没验证**：`Subwindow` 在真机（`PB3B4XJGL2090011G`，这次会话也在线）上的摆放/重叠表现。按本项目
+    既有的"真机给用户玩、模拟器给 agent 验证"分工（见上面"真机不能截图（模拟器可以）"一节），真机这一步
+    留给用户自己去试，agent 没有代做。
+- **下一个人接手建议**：手动试一遍"资讯"按钮——用模拟器自身的指针/手势交互（不要用 adb 注入 tap），
+  或者戴上真机——独立详情窗口和主窗口分栏两种场景都要看，确认：点击开合面板、loading→有数据/"暂无相关
+  资讯"两种转场、点一条新闻能展开收起、切换选中股票时面板会自动收起。顺带对 `Subwindow` 相对各自宿主
+  窗口的摆放位置做个第一印象判断，是不是长在预期的地方。
+- **这一版明确不做**（免得以后有人以为漏了、误加回来）：个股公告/大事，跳转到外部原文链接，分页/
+  "加载更多"，跨进程重启的资讯持久化缓存。
+
 ## 下一步
 
 1. ~~用真实的 `WatchlistScreen`（自选股列表 + 编辑模式 + 查询子视图）替换 `HomePage.kt`，先接本地假数据。~~
