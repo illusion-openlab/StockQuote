@@ -748,7 +748,7 @@ trap '"$LOCK" release "$OWNER" emulator-5554 >/dev/null 2>&1' EXIT INT TERM
     确认字段和内置常量，不是猜的——`NormalizedPoint3D.Left` 是 `(x=0, y=0.5, z=0.5)`，`Subwindow` 的
     KDoc 原文说 `rotation3D` 的 `pivot` 的 `z` 分量会被忽略。
   - 点一条新闻**不再是原地展开摘要**，改成 push 进一个新的 `NewsDetailScreen`（标题+完整发布时间+
-    `content` 全文），顶部一个"← 返回"文字行 pop 回列表——这是本轮用户明确要求，推翻了第一版"原地展开"
+    正文），顶部一个"← 返回"文字行 pop 回列表——这是本轮用户明确要求，推翻了第一版"原地展开"
     的裁决，别再按第一版的假设施工。`NewsPanel` 里的 `selectedNews: StockNews?` 状态跟 `code` 一起
     `remember`，切换股票时连带 push 状态一起重置，不会停在上一只股票的详情页上。
   - **截图验证**：用"临时把状态强制设为非默认值→截图→改回"的既有手法（KDJ/RSI/BOLL 当年就是这么验证
@@ -758,6 +758,32 @@ trap '"$LOCK" release "$OWNER" emulator-5554 >/dev/null 2>&1' EXIT INT TERM
     ⚠️ **45° 倾斜角度 + 模拟器截图相机本身固定窄视角叠加，这次两张截图里面板文字都相当难辨认**——这是
     已知限制（见上面"模拟器截图相机是固定窄视角的"），不是这次改动引入的新问题，只是结构性确认（芯片在
     哪、面板倾没倾、返回箭头在不在），具体倾斜角度看着协调不协调仍然要靠真机/用户亲自看。
+- **第三轮用户反馈：详情页要全文，不要搜索摘要（2026-08-25，commit `8f1876b`）**：
+  - 用户反馈"点击进资讯页面显示的只有部分信息"——实测确认了：`EastmoneyNewsSource` 的搜索接口自带的
+    `content` 字段**有时候根本不是摘要**，是命中关键词附近的原始片段，某些文章（"股东户数降幅榜"这类
+    表格型文章）抓到的是"1.20 汽车 603226 菲林格尔 7242 -1.79..."这种完全读不懂的表格碎片。
+  - 新增 `data/EastmoneyArticleSource.kt`：直接打 `StockNews.url`（东财自己的文章镜像页，不管"来源"栏
+    写的是界面新闻/证券时报网/南方财经网哪一家，链接都是同一套模板）抓正文全文，从 `id="ContentBody"`
+    切到 `class="sm"`（"原标题/郑重声明"那块的开头）为止——这个边界已经用两篇结构不同的真实文章验证过，
+    不是猜的。`url` 字段这次实测是 `http://` 前缀但 `HttpURLConnection` 不跟跨协议跳转，所以直接把协议
+    换成 `https://` 打，不处理跳转链路。
+  - `NewsDetailScreen` 先立刻显示列表页那份 `content`（有内容总比空白强），全文抓到后原地替换；抓不到
+    （无 url/网络失败/页面模板变了）会落到一个明确的终态文案"未能获取完整正文，以上为搜索摘要"，不会
+    一直转圈——第一版没有这个终态，截图验证时真的卡在"加载完整正文中…"转了 65 秒没出来过。
+  - ⚠️ **踩到一个真实的线程 bug，改的时候顺手修了**：第一版直接在 `LaunchedEffect` 里同步调
+    `EastmoneyArticleSource.fetchFullContent`（一次阻塞式网络请求），完全没有走 `Dispatchers.IO`——
+    和这个项目里所有其他数据源都不一样，`StockDataRepository` 现有的 `fetchHistory`/`fetchQuote`/
+    `fetchNews` 全部是 `suspend fun ... = withContext(Dispatchers.IO) { ... }` 这个模式。补了
+    `StockDataRepository.fetchArticle` 补齐这个模式，`NewsDetailScreen` 改成调它而不是直接调
+    `EastmoneyArticleSource`。**这不是猜的因果关系**：修之前截图卡在"加载中"转圈超过 65 秒没解决，
+    同样的等待时长修完之后第一次跑就正确显示了抓到的真实全文——阻塞主线程大概率就是那次没能在截图窗口
+    内完成请求的原因。以后新增任何"从 Composable 直接调网络函数"的代码，都要检查这一条。
+  - **截图验证**：还是"临时强制状态→截图→改回"，这次多加了一步——`LaunchedEffect(cached)` 临时自动
+    push 进第一条真实抓到的新闻（不是占位假数据），这样能在不依赖 adb tap 注入的前提下看到真实全文
+    抓取链路端到端跑通。验证完同样完整 revert（`git diff` 确认干净）。
+  - **已知限制**：这条抓取路径完全没有官方文档、没有 SLA，且比 `EastmoneyNewsSource` 的搜索接口更脆弱
+    ——它依赖东财文章镜像页的具体 HTML 结构（`id="ContentBody"`/`class="sm"` 这两个字符串边界），页面
+    改版随时可能让它失效，届时会优雅退回摘要而不是崩溃，但"全文"这个功能本身会静默失效，不会报错提醒。
 - **和设计稿的一处偏差**：设计文档原来画的是 `LazyColumn`，实现用的是普通 `Column` + `forEach`——列表
   上限 20 条且已经在外层 `verticalScroll` 里，不需要 `LazyColumn` 的按需组合，属于合理偏差。
 
