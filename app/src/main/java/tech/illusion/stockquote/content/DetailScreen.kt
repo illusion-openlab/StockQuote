@@ -1,16 +1,19 @@
 package tech.illusion.stockquote.content
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -25,6 +28,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,6 +38,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.pico.spatial.ui.design.Button
 import com.pico.spatial.ui.design.CircularProgressDefaults
 import com.pico.spatial.ui.design.CircularProgressIndicator
 import com.pico.spatial.ui.design.PicoTheme
@@ -41,11 +46,16 @@ import com.pico.spatial.ui.design.SegmentControl
 import com.pico.spatial.ui.design.SegmentItem
 import com.pico.spatial.ui.design.Text
 import com.pico.spatial.ui.design.ToggleableChip
+import com.pico.spatial.ui.design.windows.Subwindow
+import com.pico.spatial.ui.design.windows.SubwindowPlacement
 import com.pico.spatial.ui.foundation.gesture.detectSpatialDragGesture
 import com.pico.spatial.ui.foundation.gesture.detectTapGestures
+import com.pico.spatial.ui.foundation.hover.spatialHoverEffect
 import tech.illusion.stockquote.data.Candle
 import tech.illusion.stockquote.data.KPeriod
 import tech.illusion.stockquote.data.QuoteSnapshot
+import tech.illusion.stockquote.data.StockDataRepository
+import tech.illusion.stockquote.data.StockNews
 import tech.illusion.stockquote.data.StockRepository
 import tech.illusion.stockquote.data.aggregateCandles
 import tech.illusion.stockquote.data.buildCandles
@@ -150,6 +160,8 @@ fun DetailScreen(code: String?, headerEndInset: Dp = 0.dp) {
         var periodIndex by remember { mutableIntStateOf(0) }
         var rangeIndex by remember { mutableIntStateOf(1) }
         var moreInfoOpen by remember { mutableStateOf(false) }
+        var newsExpanded by remember(stock.code) { mutableStateOf(false) }
+        val newsCache = remember { mutableStateMapOf<String, List<StockNews>>() }
         val indicators = remember {
             mutableStateMapOf(
                 "ma5" to true, "ma10" to true, "ma20" to true, "ma30" to false, "ma180" to false,
@@ -268,6 +280,20 @@ fun DetailScreen(code: String?, headerEndInset: Dp = 0.dp) {
                     style = PicoTheme.typography.labelMedium,
                     color = changeColor,
                 )
+            }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+
+        ToggleableChip(
+            label = { Text(if (newsExpanded) "资讯 ▴" else "资讯 ▾") },
+            isToggleOn = newsExpanded,
+            onClick = { newsExpanded = !newsExpanded },
+        )
+        if (newsExpanded) {
+            Subwindow(placement = SubwindowPlacement.Right) {
+                PicoTheme {
+                    NewsPanel(code = stock.code, cache = newsCache)
+                }
             }
         }
         Spacer(modifier = Modifier.height(10.dp))
@@ -720,6 +746,84 @@ private fun SubPanel(title: String, legend: List<LegendEntry>, content: @Composa
         }
         Spacer(modifier = Modifier.height(4.dp))
         content()
+    }
+}
+
+/**
+ * 资讯 `Subwindow` 的内容。`cache` 是 `DetailScreen` 传下来的、跟它同生命周期的按 code 缓存——同一次
+ * 打开/关闭同一只股票不重复发请求，见设计文档 §3。
+ */
+@Composable
+private fun NewsPanel(code: String, cache: SnapshotStateMap<String, List<StockNews>>) {
+    var loadFailed by remember(code) { mutableStateOf(false) }
+    var reloadToken by remember(code) { mutableIntStateOf(0) }
+    val cached = cache[code]
+
+    LaunchedEffect(code, reloadToken) {
+        if (cache.containsKey(code)) return@LaunchedEffect
+        loadFailed = false
+        val result = StockDataRepository.fetchNews(code)
+        if (result == null) loadFailed = true else cache[code] = result
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(360.dp)
+            .background(PicoTheme.colorScheme.fillPrimary)
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+    ) {
+        Text("资讯", style = PicoTheme.typography.titleMedium, color = PicoTheme.colorScheme.labelPrimary)
+        Spacer(modifier = Modifier.height(12.dp))
+        when {
+            cached != null && cached.isEmpty() -> Text(
+                text = "暂无相关资讯",
+                style = PicoTheme.typography.bodyMedium,
+                color = PicoTheme.colorScheme.labelTertiary,
+            )
+            cached != null -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                cached.forEach { news -> NewsRow(news) }
+            }
+            loadFailed -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "资讯加载失败，请重试",
+                    style = PicoTheme.typography.bodyMedium,
+                    color = PicoTheme.colorScheme.labelTertiary,
+                )
+                Button(onClick = { reloadToken++ }) { Text("重试") }
+            }
+            else -> Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CircularProgressIndicator(progressSize = CircularProgressDefaults.circleProgressSize(18.dp))
+                Text("加载中…", style = PicoTheme.typography.bodyMedium, color = PicoTheme.colorScheme.labelTertiary)
+            }
+        }
+    }
+}
+
+/** 一条新闻：标题 + 时间，点击原地展开/收起摘要（`content`），不跳转外部链接（设计文档 §3/§7）。 */
+@Composable
+private fun NewsRow(news: StockNews) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(PicoTheme.colorScheme.fillTertiary)
+            .spatialHoverEffect()
+            .clickable { expanded = !expanded }
+            .padding(12.dp),
+    ) {
+        Text(news.title, style = PicoTheme.typography.bodyMedium, color = PicoTheme.colorScheme.labelPrimary)
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(news.publicTime, style = PicoTheme.typography.labelSmall, color = PicoTheme.colorScheme.labelQuaternary)
+        if (expanded) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(news.content, style = PicoTheme.typography.bodySmall, color = PicoTheme.colorScheme.labelSecondary)
+        }
     }
 }
 
