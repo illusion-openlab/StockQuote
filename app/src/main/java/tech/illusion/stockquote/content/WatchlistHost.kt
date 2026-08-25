@@ -68,6 +68,9 @@ fun WatchlistHost() {
     // 一次性拉全量历史（K 线用）；随后按设计文档 §6/§7 的节奏轮询自选股最新报价。
     // 生命周期绑定在这个常驻的主窗口 Composable 上，离开 composition 会自动取消，不需要手动清理。
     LaunchedEffect(Unit) { StockRepository.refreshAll() }
+    // 补上一次性把重启后本地库查不到的那批持久化自选股异步抓回来（见 StockRepository.resolvePendingWatchlist
+    // 的 KDoc）——只在冷启动后跑一次，跟上面 refreshAll() 各管各的，互不冲突。
+    LaunchedEffect(Unit) { StockRepository.resolvePendingWatchlist() }
     LaunchedEffect(Unit) {
         while (true) {
             delay(QUOTE_POLL_INTERVAL_MS)
@@ -120,15 +123,34 @@ fun WatchlistHost() {
 
     // 契约 v5 §6：即时移除 + 5 秒撤销条，取代了旧版的二次确认弹窗。三个移除入口
     // （搜索结果行尾钮、列表行"✕"、详情区"更多"菜单）都通过这一个回调汇入撤销条。
+    //
+    // 移除的如果正好是当前选中项，顺手把 selectedCode 清掉——不这么做的话，selectedCode 会变成
+    // 一个"已经不在 watchlist 里、但因为 _universe 从不回收所以下面 activeCode 仍然解析得出"的
+    // 死代码，详情区就不会落回第一行了（见下面 activeCode 的推导，2026-08-25 为了让搜索里点未自选
+    // 行也能预览详情而改成优先信 universe，必须配上这个清空动作才不破坏"移除后落回第一行"的老行为）。
+    // 撤销时再把它设回去，这样"移除→撤销"能原样恢复到撤销前正在看的那只，而不是随便落在表头第一行。
     val onRemoved: (RemovedSnapshot) -> Unit = { snapshot ->
-        offerUndo("已移除「${snapshot.stock.name}」") { StockRepository.restore(snapshot) }
+        val wasSelected = snapshot.stock.code == selectedCode
+        if (wasSelected) selectedCode = null
+        offerUndo("已移除「${snapshot.stock.name}」") {
+            StockRepository.restore(snapshot)
+            if (wasSelected) selectedCode = snapshot.stock.code
+        }
     }
 
     val watchlist = StockRepository.watchlist
-    // 默认选中第一行（对齐 v2 稿的"默认选中第一项"）。写成派生值而不是 LaunchedEffect 纠正：
-    // 选中的股票被移除后会自动落回第一行，不需要额外的同步逻辑，也不会出现指向已删除代码的空窗。
-    val activeCode = watchlist.firstOrNull { it.code == selectedCode }?.code
-        ?: watchlist.firstOrNull()?.code
+    // 详情区显示哪只股票：优先跟 selectedCode 走，不管它是不是已经在 watchlist 里、也不管
+    // universe 里查不查得到（2026-08-25 修复第二轮：上一版这里加了 `universe.any { ... }` 的防御性
+    // 检查，结果把"点一只全市场搜索命中、从没抓取过的远端股票"也一并挡住了——这类股票压根没进过
+    // universe，检查一律为 false，于是刚选中的值被丢弃，退回第一行。selectedCode 该清空的时机已经
+    // 完全交给上面的 onRemoved 处理，这里不需要再靠"是否解析得出"去猜测——猜的话就是这个 bug）。
+    //
+    // 对一只还没抓过数据的远端股票，DetailScreen 自己会展示"未找到股票数据"的兜底文案，不会崩，
+    // 也不会显示假数据；一旦这只股票被加了自选（真正抓到数据、进了 universe），同一个 activeCode
+    // 不变，详情区会在下一次重组里自动补全真实内容。
+    //
+    // 落回第一行只在 selectedCode 为 null 时发生——要么从没选过，要么 onRemoved 刚清空了它。
+    val activeCode = selectedCode ?: watchlist.firstOrNull()?.code
 
     Row(modifier = Modifier.fillMaxSize()) {
         // 撤销条是**浮层**（契约 v5 §6「浮在左栏底部」），所以这里是 Box 而不是 Column：

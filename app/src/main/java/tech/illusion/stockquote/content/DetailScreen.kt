@@ -34,6 +34,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.pico.spatial.ui.design.CircularProgressDefaults
+import com.pico.spatial.ui.design.CircularProgressIndicator
 import com.pico.spatial.ui.design.PicoTheme
 import com.pico.spatial.ui.design.SegmentControl
 import com.pico.spatial.ui.design.SegmentItem
@@ -123,11 +125,25 @@ fun DetailScreen(code: String?, headerEndInset: Dp = 0.dp) {
             .padding(20.dp),
     ) {
         if (stock == null) {
-            Text(
-                text = "未找到股票数据",
-                style = PicoTheme.typography.bodyMedium,
-                color = PicoTheme.colorScheme.labelTertiary,
-            )
+            if (code != null && StockRepository.isPreviewLoading(code)) {
+                // 正在为预览抓数据，不是真的"未找到"——2026-08-25：用户反馈点未自选的远端股票只显示
+                // "未找到股票数据"，要等加自选才有数据；现在预览也会真去抓，这里给个加载态而不是让它
+                // 直接从空白跳到有数据，中间那段等待时间不该看着像"这只股票不存在"。
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CircularProgressIndicator(progressSize = CircularProgressDefaults.circleProgressSize(18.dp))
+                    Text(
+                        text = "加载中…",
+                        style = PicoTheme.typography.bodyMedium,
+                        color = PicoTheme.colorScheme.labelTertiary,
+                    )
+                }
+            } else {
+                Text(
+                    text = "未找到股票数据",
+                    style = PicoTheme.typography.bodyMedium,
+                    color = PicoTheme.colorScheme.labelTertiary,
+                )
+            }
             return@Column
         }
 

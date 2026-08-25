@@ -182,7 +182,14 @@ internal fun SearchPane(
                     change = "%s%.2f%%".format(if (change >= 0) "+" else "", change),
                     changeColor = if (change >= 0) StockUpColor else StockDownColor,
                     membership = StockRepository.membershipOf(code),
-                    onSelect = { onSelect(code) },
+                    onSelect = {
+                        onSelect(code)
+                        // 预览未自选的股票也要能看到真实详情，不用先加自选（2026-08-25）。本地这条路径
+                        // 其实已经在 universe 里了，ensurePreviewData 会走它自己的快路径立刻返回 true，
+                        // 不会真的发网络请求——调用它是为了让远端行的同一段代码逻辑保持一致，不是因为
+                        // 本地行真的需要抓取。
+                        scope.launch { StockRepository.ensurePreviewData(code, stock.name) }
+                    },
                     onAdd = add,
                     onRemove = { StockRepository.remove(code)?.let(onRemoved) },
                     onRetry = add,
@@ -213,7 +220,11 @@ internal fun SearchPane(
                         change = null,
                         changeColor = Color.Unspecified,
                         membership = StockRepository.membershipOf(code),
-                        onSelect = { onSelect(code) },
+                        onSelect = {
+                            onSelect(code)
+                            // 预览未自选的远端股票也要看到真实详情，不用先加自选（2026-08-25）。
+                            scope.launch { StockRepository.ensurePreviewData(code, name) }
+                        },
                         onAdd = add,
                         onRemove = { StockRepository.remove(code)?.let(onRemoved) },
                         onRetry = add,
@@ -243,9 +254,9 @@ private fun ResultRow(
     onRetry: () -> Unit,
 ) {
     ListItem(
-        // 已自选的行点了去右栏看详情；没自选的行点了不做事（加自选只走行尾那颗钮，
-        // 不再有"点行选中→冒出按钮"的中间态）。
-        modifier = Modifier.fillMaxWidth().clickable(enabled = membership == Membership.Added) { onSelect() },
+        // 任何一行点了都去右栏预览详情——不管加没加自选（2026-08-25 用户报告：点未自选的行完全没
+        // 反应）。加/删自选只走行尾那颗四态钮，跟"点行看详情"是两件独立的事。
+        modifier = Modifier.fillMaxWidth().clickable { onSelect() },
         // 未选中必须传 Color.Transparent 而不是 Color.Unspecified：ListItemColors.copy() 内部是
         // takeOrElse{}（ListItem.kt:202），Unspecified 会被当成"没指定"回落到默认的 fillLight。
         colors = ListItemDefaults.listItemColors(backgroundColor = Color.Transparent),

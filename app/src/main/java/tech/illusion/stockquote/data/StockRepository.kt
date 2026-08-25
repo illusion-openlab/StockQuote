@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateSetOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -63,13 +64,70 @@ object StockRepository {
     val watchlist: List<Stock>
         get() = _watchlist
 
+    /** 一条还没能重新抓到数据的持久化自选股：冷启动时在本地库里查不到，需要异步补一次真实抓取。 */
+    private data class PendingRestoreEntry(val code: String, val name: String, val orderIndex: Int)
+
+    /**
+     * 冷启动时持久化列表里"本地库查不到"的那些自选股（也就是全市场搜索加进来的）——留到
+     * [resolvePendingWatchlist] 异步补抓。**[persist] 必须把它们也写回存储**，否则应用生命周期内
+     * 只要触发一次跟它们无关的持久化（移除别的股票、置顶、加别的自选……），这些还没解析出来的
+     * code 就会从这次写入里凭空消失——它们明明还没来得及重试就被判了死刑。
+     */
+    private var _pendingRestore: List<PendingRestoreEntry> = emptyList()
+
     /** Call once from `Application.onCreate` — loads any previously saved watchlist from disk. */
     fun init(context: Context) {
         WatchlistLocalStore.init(context)
-        val savedCodes = WatchlistLocalStore.loadCodesInOrder() ?: return // first run: keep the default seed
-        orderCounter = 0
-        _watchlist = savedCodes.mapNotNull { code -> _universe.find { it.code == code } }
-            .map { it.copy(orderIndex = orderCounter++) }
+        val saved = WatchlistLocalStore.loadWatchlistEntries() ?: return // first run: keep the default seed
+        val resolvedNow = mutableListOf<Stock>()
+        val pending = mutableListOf<PendingRestoreEntry>()
+        saved.forEachIndexed { index, (code, name) ->
+            val seedMatch = _universe.find { it.code == code }
+            if (seedMatch != null) {
+                resolvedNow += seedMatch.copy(orderIndex = index)
+            } else {
+                pending += PendingRestoreEntry(code, name, index)
+            }
+        }
+        // 未来新加的自选股（addFromUniverse/addRemote）的 orderIndex 必须从"比持久化列表里最大的
+        // 位置还大"开始，不管那个位置对应的条目这次是同步解析出来了还是还在 pending 里——否则新加的
+        // 一条可能撞上一个还没解析出来的 pending orderIndex，排序就乱了。
+        orderCounter = saved.size
+        _watchlist = resolvedNow
+        _pendingRestore = pending
+    }
+
+    /**
+     * 冷启动后，把上次持久化的自选股里"本地库查不到"的那些（也就是全市场搜索加进来的，不在
+     * `universeSeed` 那 12 只里）真正抓一次数据补回 `_watchlist`——修复"搜索加的股票重启后消失"。
+     *
+     * 只在这次启动尝试一次：某个 code 这次抓失败（网络还没起来、这个 app 用的免费接口出了名地会限流，
+     * 见 AGENTS.md），不会在这次会话里反复重试，但也**不会**从持久化里被丢掉——留到下次启动再试。
+     * 真正加过自选、只是这次刚好抓失败的股票，不应该因为一次瞬时失败就永久从自选列表消失。
+     *
+     * 调用方（`WatchlistHost` 启动时的 `LaunchedEffect`）不需要等这个函数跑完才展示界面——本地库
+     * 能同步解析的那些已经在 `init()` 里直接进了 `_watchlist`，这个函数只是把剩下那批异步补上。
+     */
+    suspend fun resolvePendingWatchlist() {
+        if (_pendingRestore.isEmpty()) return
+        val stillPending = mutableListOf<PendingRestoreEntry>()
+        for (entry in _pendingRestore) {
+            // 已经被别的路径解决了——比如用户没等这个函数跑完，就自己在搜索里把同一只股票重新加了一次
+            // 回来（addFromUniverse/addRemote 都会把它从 _pendingRestore 里摘掉，但这个 for 循环是在
+            // 循环开始那一刻就拿到了 _pendingRestore 的旧快照，摘除动作影响不到这次正在跑的迭代，
+            // 所以还是会走到这一条）。不跳过的话会把同一个 code 第二次 append 进 _watchlist，
+            // 造出重复 key，撞上 LazyColumn 直接崩——这是 2026-08-25 复核抓到的真实 bug。
+            if (isInWatchlist(entry.code)) continue
+            if (ensurePreviewData(entry.code, entry.name)) {
+                _universe.find { it.code == entry.code }?.let { stock ->
+                    _watchlist = (_watchlist + stock.copy(orderIndex = entry.orderIndex)).sortedBy { it.orderIndex }
+                }
+            } else {
+                stillPending += entry
+            }
+        }
+        _pendingRestore = stillPending
+        persist()
     }
 
     /**
@@ -220,7 +278,10 @@ object StockRepository {
     }
 
     private fun persist() {
-        WatchlistLocalStore.save(_watchlist.sortedBy { it.orderIndex }.map { it.code })
+        val liveEntries = _watchlist.map { it.orderIndex to (it.code to it.name) }
+        val pendingEntries = _pendingRestore.map { it.orderIndex to (it.code to it.name) }
+        val merged = (liveEntries + pendingEntries).sortedBy { it.first }.map { it.second }
+        WatchlistLocalStore.save(merged)
     }
 
     fun isInWatchlist(code: String): Boolean = _watchlist.any { it.code == code }
@@ -251,6 +312,51 @@ object StockRepository {
     fun pruneOpStates(visibleCodes: Set<String>) {
         val stale = _opStates.keys.filterNot { it in visibleCodes }
         stale.forEach { _opStates.remove(it) }
+    }
+
+    /**
+     * 单飞锁：同一个 code 同一时间只允许一次真实抓取在跑，不管这次抓取是"预览"触发的还是"加自选"
+     * 触发的——两条独立入口（[ensurePreviewData] / [addRemote]）如果各自发起一次网络请求，都会往
+     * `_universe` 追加一条同 code 的 Stock，撞上 LazyColumn 的 `key = { it.code }` 直接崩。
+     * 跟 [_opStates] 分开：`_opStates` 只管 [MembershipToggle] 要显示什么（提交中/失败），这张锁
+     * 只管"要不要真的发一次网络请求"——预览触发抓取时不应该让加自选按钮跟着转圈，两件事语义不同。
+     */
+    private val _fetchInFlight = mutableStateSetOf<String>()
+
+    /** 详情区据此判断：是不是正在为这只股票拉预览数据（还没抓完，不是真的"未找到"）。 */
+    fun isPreviewLoading(code: String): Boolean = code in _fetchInFlight
+
+    /**
+     * 只把 code 的真实数据抓进 `_universe`，不动 `_watchlist`、不动 `_opStates`——用于"预览一只还没
+     * 加自选的远端股票详情"（2026-08-25：用户反馈搜索命中的远端股票点了只显示"未找到股票数据"，
+     * 要等加了自选才有数据；这条补上"预览也能看到真实详情"，不用先加自选）。
+     *
+     * 已经在 `_universe` 里（本地库自带的、或者之前预览/加自选抓过的）直接返回 `true`，不重复抓。
+     * 并发调用同一个 code 也不会抓两次：`_fetchInFlight.add(code)` 拿不到锁就直接返回 `false`——
+     * 调用方（[SearchPane]）本来就是"选中即触发"，同一个 code 短时间内被选中两次是可能的（比如用户
+     * 手滑点了两下），这条保证不会因此发出两次网络请求。
+     *
+     * 也被 [addRemote] 复用来做真正的抓取：两个入口必须共享同一把 `_fetchInFlight` 锁，见那边的
+     * 注释。
+     */
+    suspend fun ensurePreviewData(code: String, name: String): Boolean {
+        if (_universe.any { it.code == code }) return true
+        if (!_fetchInFlight.add(code)) return false
+        try {
+            val remote = StockDataRepository.fetchHistory(code, days = 500)
+            if (remote == null || remote.closes.size < 2) return false
+            val resolvedName = name.ifBlank { remote.name?.takeIf { it.isNotBlank() } ?: code }
+            _universe = _universe + Stock(
+                code = code,
+                name = resolvedName,
+                hist = remote.closes,
+                candles = remote.candles,
+                snapshot = remote.snapshot,
+            )
+            return true
+        } finally {
+            _fetchInFlight.remove(code)
+        }
     }
 
     /**
@@ -290,6 +396,10 @@ object StockRepository {
         if (isInWatchlist(code)) return
         val item = _universe.find { it.code == code } ?: return
         _watchlist = _watchlist + item.copy(orderIndex = orderCounter++)
+        // 这只股票有可能同时还挂在 _pendingRestore 里（比如冷启动异步补抓还没轮到它，用户等不及自己
+        // 手动加了回来）——摘掉它，否则 resolvePendingWatchlist 稍后遍历到同一个 code 会再插一次，
+        // 造出重复 key（2026-08-25 复核抓到的真实 bug）。
+        _pendingRestore = _pendingRestore.filterNot { it.code == code }
         persist()
     }
 
@@ -305,31 +415,37 @@ object StockRepository {
      * 并发重复点击也返回 `false`：见函数开头那条 `Adding` 守卫。
      */
     suspend fun addRemote(code: String, name: String): Boolean {
-        // 双击竞态守卫：下面的 fetchHistory 是挂起点，第二次点击会在第一次的 _watchlist 写入落地之前
-        // 就通过 isInWatchlist 检查，两条协程各自往 _watchlist 追加同一个 code —— LazyColumn 的
-        // `key = { it.code }` 一撞上重复 key 就直接抛异常崩掉。
-        // Adding 是第一次点击在**挂起之前**同步写下的，所以这条同步检查足以关掉那个窗口。
+        // 双击竞态守卫：见 ensurePreviewData 的锁——那把锁挡的是"同一个 code 别发两次网络请求"，
+        // 这里额外挡的是"同一个 code 的加自选按钮别被连点两次都走到追加 _watchlist 那一步"。
         // 注意只挡 Adding，不挡 Failed：Failed 状态下再点是用户主动重试，必须放行。
         if (_opStates[code] == Membership.Adding) return false
         if (isInWatchlist(code)) return true
         _universe.find { it.code == code }?.let { existing ->
             _watchlist = _watchlist + existing.copy(orderIndex = orderCounter++)
             _opStates.remove(code)
+            // 同一个 code 有可能还挂在 _pendingRestore 里——见 addFromUniverse 同一处的注释，原理一样。
+            _pendingRestore = _pendingRestore.filterNot { it.code == code }
             persist()
             return true
         }
         _opStates[code] = Membership.Adding
-        val remote = StockDataRepository.fetchHistory(code, days = 500)
-        // 失败一律回滚成 Failed，绝不留一条 hist 不足 2 个点的空壳自选：Stock.price()/changePercent()
-        // 全项目都假设至少 2 个点，行一进 composition 就会崩。
-        if (remote == null || remote.closes.size < 2) {
+        // 抓取本体复用 ensurePreviewData（2026-08-25 新增，供"预览未自选的远端股票详情"使用）——
+        // 两个入口都要往 _universe 追加同一个 code，必须走同一把锁（_fetchInFlight），否则"选中预览"
+        // 和"点加自选"并发时会各发一次请求、往 _universe 塞两条同 code 的 Stock，撞上 LazyColumn 的
+        // key 崩溃。如果这次调用刚好撞上一次已经在飞的抓取(无论是预览触发的还是别的加自选触发的),
+        // ensurePreviewData 会直接返回 false——这里就老实报 Failed，用户能再点一次重试（这时大概率
+        // 前一次抓取已经完成、universe 里已经有数据了，重试会走上面"已在 universe"的快路径直接成功）。
+        if (!ensurePreviewData(code, name)) {
             _opStates[code] = Membership.Failed
             return false
         }
-        val stock = Stock(code = code, name = name, hist = remote.closes, candles = remote.candles, snapshot = remote.snapshot)
-        _universe = _universe + stock
+        val stock = _universe.find { it.code == code } ?: run {
+            _opStates[code] = Membership.Failed
+            return false
+        }
         _watchlist = _watchlist + stock.copy(orderIndex = orderCounter++)
         _opStates.remove(code)
+        _pendingRestore = _pendingRestore.filterNot { it.code == code }
         persist()
         return true
     }
