@@ -786,6 +786,32 @@ trap '"$LOCK" release "$OWNER" emulator-5554 >/dev/null 2>&1' EXIT INT TERM
     改版随时可能让它失效，届时会优雅退回摘要而不是崩溃，但"全文"这个功能本身会静默失效，不会报错提醒。
 - **和设计稿的一处偏差**：设计文档原来画的是 `LazyColumn`，实现用的是普通 `Column` + `forEach`——列表
   上限 20 条且已经在外层 `verticalScroll` 里，不需要 `LazyColumn` 的按需组合，属于合理偏差。
+- **第四轮用户反馈：导航栏被内容一起滚走了（2026-08-25，commit `e874f42`）**：
+  - 用户截图反馈：滚动一篇长文章（全文抓取上线后文章变长了，更容易触发）时，顶部"← 返回"跟着内容一起
+    被滚出可视区，够不到，只能滚回顶部才能返回。根因：`NewsPanel` 原来把"头（标题/返回行）+ 内容"整个
+    包在同一个 `Modifier.verticalScroll(...)` 里，头只是可滚动内容里的第一个子项，不是钉住的导航栏。
+  - 改法：`NewsPanel` 拆成"固定头（`资讯`标题 / 「← 返回」行，不带 `verticalScroll`）+ 单独一个
+    `Column(Modifier.weight(1f).verticalScroll(...))` 装列表或详情正文"。原来的 `NewsDetailScreen`
+    改名 `NewsDetailBody`，不再自己画返回行——返回行现在和"资讯"标题共用同一个固定头槽位，都在
+    `NewsPanel` 里。
+    ⚠️ **`Modifier.weight(1f)` 必须直接写在 `Column{}` 字面量里**，不能抽到 `NewsDetailBody`/别的单独
+    函数里靠隐式 `ColumnScope` receiver 解析——这是本文件"weight/classpath 坑"那条已经踩过的教训
+    （显式 import 顶层 `weight` 会解析到不匹配的版本，报 `internal` 访问错误），这次照抄那条约束。
+  - **截图验证时顺带抓到一个已排除的 ANR，如实记一笔**：验证这次改动期间模拟器弹出过一次系统级
+    "千股查没有响应"对话框（`Input dispatching timed out ... Waited 5012ms for FocusEvent`）。拉取
+    `/data/anr/` 的 trace 确认：主线程当时在 `Looper` 里空闲等消息，**不是**被同步代码卡住——所以
+    不是上一版那个"直接在 `LaunchedEffect` 里同步调网络"的线程 bug（那个已经在全文抓取那次改动里修了）。
+    这个 ANR 的 Subject 是"等 FocusEvent 超时"，更像是窗口焦点层面的东西，而且只在"临时把
+    `newsExpanded` 和自动 push 进详情这两个状态一次性同时强制触发"的验证手法下出现过一次——单独只强制
+    打开列表（不 push 详情）复测一次没有复现（`/data/anr/` 目录没有新文件）。**没有下定论**：可能是这次
+    验证手法本身"同一帧里连续触发两次窗口焦点相关的状态变化"不代表真实用户操作节奏（真实操作是分开的
+    两次点击，中间隔着人的反应时间），也可能是这台模拟器今天已经被反复启动很多次后的资源退化，两者都没
+    有进一步排除。**下一个人如果又碰到类似 ANR，别假设"肯定又是那个线程 bug"，先拉 `/data/anr/` 里最新
+    的 trace 看主线程当时到底在干什么，这次的教训就是"先看 trace 再下结论"。**
+    另外发现一条新坑：**这台环境里连系统级 ANR 对话框也收不到 adb 注入的 tap**——两次尝试点"等待"/
+    "关闭应用"都落空，点到了对话框底下的桌面图标上（其中一次误开了白板应用，已经用
+    `pico-cli app stop tech.illusion.spacewhiteboard` 清掉）。这条对话框最终没能用自动化清掉，只能
+    留给下一个直接操作模拟器的人手动点掉——不要再用 adb tap 重试，浪费设备占用时间。
 
 ## 下一步
 
