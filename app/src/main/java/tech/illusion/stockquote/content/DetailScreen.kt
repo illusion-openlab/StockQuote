@@ -47,6 +47,9 @@ import com.pico.spatial.ui.design.Text
 import com.pico.spatial.ui.design.ToggleableChip
 import com.pico.spatial.ui.design.windows.Subwindow
 import com.pico.spatial.ui.design.windows.SubwindowPlacement
+import com.pico.spatial.ui.foundation.geometry.NormalizedPoint3D
+import com.pico.spatial.ui.foundation.geometry.Rotation3D
+import com.pico.spatial.ui.foundation.geometry.RotationAxis3D
 import com.pico.spatial.ui.foundation.gesture.detectSpatialDragGesture
 import com.pico.spatial.ui.foundation.gesture.detectTapGestures
 import com.pico.spatial.ui.foundation.hover.spatialHoverEffect
@@ -283,20 +286,6 @@ fun DetailScreen(code: String?, headerEndInset: Dp = 0.dp) {
         }
         Spacer(modifier = Modifier.height(10.dp))
 
-        ToggleableChip(
-            label = { Text(if (newsExpanded) "资讯 ▴" else "资讯 ▾") },
-            isToggleOn = newsExpanded,
-            onClick = { newsExpanded = !newsExpanded },
-        )
-        if (newsExpanded) {
-            Subwindow(placement = SubwindowPlacement.Right) {
-                PicoTheme(colorScheme = StockQuoteColorScheme) {
-                    NewsPanel(code = stock.code, cache = newsCache)
-                }
-            }
-        }
-        Spacer(modifier = Modifier.height(10.dp))
-
         // 基本参数 3×3（契约 v3 §1/§2.5）。今开/最高/最低/成交额来自 kline 行本身，是真实值；
         // 市值/流通市值/市盈率/量比/换手率要靠 quote 端点的扩展字段，字段码尚未核实（东财对本机
         // 限流），按契约"拿不到就显示 —，不用假数据凑数"的原则先显示 NoValue。
@@ -322,12 +311,33 @@ fun DetailScreen(code: String?, headerEndInset: Dp = 0.dp) {
         // "更多信息"折叠区紧跟在基本参数网格下方——契约 v3 §2.6 原文是"基本参数网格下方一个默认折叠的
         // 更多信息展开区"，v3 原型也画在这个位置。（第一轮门禁 B 比对时它被放在了最底部、所有子面板之后，
         // 判为 Major 并在第二轮修正。折叠态只占一行，不会把图表推太远。）
+        // "资讯"挪到这一行和"更多信息"并排（用户 2026-08-25 反馈要求同一水平位置），更多信息在左、
+        // 资讯在右——两者都是"点了展开一块东西"的心智，放一起比原来分居头部/网格下方更连贯。
         Spacer(modifier = Modifier.height(6.dp))
-        ToggleableChip(
-            label = { Text(if (moreInfoOpen) "更多信息 ▴" else "更多信息 ▾") },
-            isToggleOn = moreInfoOpen,
-            onClick = { moreInfoOpen = !moreInfoOpen },
-        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ToggleableChip(
+                label = { Text(if (moreInfoOpen) "更多信息 ▴" else "更多信息 ▾") },
+                isToggleOn = moreInfoOpen,
+                onClick = { moreInfoOpen = !moreInfoOpen },
+            )
+            ToggleableChip(
+                label = { Text(if (newsExpanded) "资讯 ▴" else "资讯 ▾") },
+                isToggleOn = newsExpanded,
+                onClick = { newsExpanded = !newsExpanded },
+            )
+        }
+        if (newsExpanded) {
+            // 左边 Y 轴倾斜 45°（用户 2026-08-25 要求）：pivot 钉在左边缘（NormalizedPoint3D.Left），
+            // 面板像沿左边铰链掀开的书页/门扇一样朝右侧转开，而不是绕自身中心转。
+            Subwindow(
+                placement = SubwindowPlacement.Right,
+                rotation3D = Rotation3D(degree = 45f, axis = RotationAxis3D.Y, pivot = NormalizedPoint3D.Left),
+            ) {
+                PicoTheme(colorScheme = StockQuoteColorScheme) {
+                    NewsPanel(code = stock.code, cache = newsCache)
+                }
+            }
+        }
         if (moreInfoOpen) {
             Spacer(modifier = Modifier.height(8.dp))
             MoreInfoSection(
@@ -756,6 +766,9 @@ private fun SubPanel(title: String, legend: List<LegendEntry>, content: @Composa
 private fun NewsPanel(code: String, cache: SnapshotStateMap<String, List<StockNews>>) {
     var loadFailed by remember(code) { mutableStateOf(false) }
     var reloadToken by remember(code) { mutableIntStateOf(0) }
+    // push/pop 导航：非空时整块换成 NewsDetailScreen，回退按钮把它清回 null。跟 code 一起 remember，
+    // 切换选中股票（连带整个 NewsPanel 一起被丢弃重建）时自动回到列表，不会停在上一只股票的详情页上。
+    var selectedNews by remember(code) { mutableStateOf<StockNews?>(null) }
     val cached = cache[code]
 
     LaunchedEffect(code, reloadToken) {
@@ -773,57 +786,79 @@ private fun NewsPanel(code: String, cache: SnapshotStateMap<String, List<StockNe
             .padding(16.dp)
             .verticalScroll(rememberScrollState()),
     ) {
-        Text("资讯", style = PicoTheme.typography.titleMedium, color = PicoTheme.colorScheme.labelPrimary)
-        Spacer(modifier = Modifier.height(12.dp))
-        when {
-            cached != null && cached.isEmpty() -> Text(
-                text = "暂无相关资讯",
-                style = PicoTheme.typography.bodyMedium,
-                color = PicoTheme.colorScheme.labelTertiary,
-            )
-            cached != null -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                cached.forEach { news -> NewsRow(news) }
-            }
-            loadFailed -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = "资讯加载失败，请重试",
+        val currentNews = selectedNews
+        if (currentNews != null) {
+            NewsDetailScreen(news = currentNews, onBack = { selectedNews = null })
+        } else {
+            Text("资讯", style = PicoTheme.typography.titleMedium, color = PicoTheme.colorScheme.labelPrimary)
+            Spacer(modifier = Modifier.height(12.dp))
+            when {
+                cached != null && cached.isEmpty() -> Text(
+                    text = "暂无相关资讯",
                     style = PicoTheme.typography.bodyMedium,
                     color = PicoTheme.colorScheme.labelTertiary,
                 )
-                Button(onClick = { reloadToken++ }) { Text("重试") }
-            }
-            else -> Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                CircularProgressIndicator(progressSize = CircularProgressDefaults.circleProgressSize(18.dp))
-                Text("加载中…", style = PicoTheme.typography.bodyMedium, color = PicoTheme.colorScheme.labelTertiary)
+                cached != null -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    cached.forEach { news -> NewsRow(news, onClick = { selectedNews = news }) }
+                }
+                loadFailed -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "资讯加载失败，请重试",
+                        style = PicoTheme.typography.bodyMedium,
+                        color = PicoTheme.colorScheme.labelTertiary,
+                    )
+                    Button(onClick = { reloadToken++ }) { Text("重试") }
+                }
+                else -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CircularProgressIndicator(progressSize = CircularProgressDefaults.circleProgressSize(18.dp))
+                    Text("加载中…", style = PicoTheme.typography.bodyMedium, color = PicoTheme.colorScheme.labelTertiary)
+                }
             }
         }
     }
 }
 
-/** 一条新闻：标题 + 时间，点击原地展开/收起摘要（`content`），不跳转外部链接（设计文档 §3/§7）。 */
+/** 一条新闻：标题 + 时间，点击 push 进 [NewsDetailScreen]（用户 2026-08-25 要求，取代原来的原地展开）。 */
 @Composable
-private fun NewsRow(news: StockNews) {
-    var expanded by remember { mutableStateOf(false) }
+private fun NewsRow(news: StockNews, onClick: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(PicoTheme.colorScheme.fillTertiary)
             .spatialHoverEffect()
-            .clickable { expanded = !expanded }
+            .clickable(onClick = onClick)
             .padding(12.dp),
     ) {
         Text(news.title, style = PicoTheme.typography.bodyMedium, color = PicoTheme.colorScheme.labelPrimary)
         Spacer(modifier = Modifier.height(4.dp))
         Text(news.publicTime, style = PicoTheme.typography.labelSmall, color = PicoTheme.colorScheme.labelQuaternary)
-        if (expanded) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(news.content, style = PicoTheme.typography.bodySmall, color = PicoTheme.colorScheme.labelSecondary)
-        }
     }
+}
+
+/** 新闻详情页：`NewsRow` 点击后 push 进来的整屏，顶部「← 返回」pop 回列表（用户 2026-08-25 要求）。 */
+@Composable
+private fun NewsDetailScreen(news: StockNews, onBack: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onBack)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text("←", style = PicoTheme.typography.titleMedium, color = PicoTheme.colorScheme.labelPrimary)
+        Text("返回", style = PicoTheme.typography.bodyMedium, color = PicoTheme.colorScheme.labelPrimary)
+    }
+    Spacer(modifier = Modifier.height(12.dp))
+    Text(news.title, style = PicoTheme.typography.titleMedium, color = PicoTheme.colorScheme.labelPrimary)
+    Spacer(modifier = Modifier.height(4.dp))
+    Text(news.publicTime, style = PicoTheme.typography.labelSmall, color = PicoTheme.colorScheme.labelQuaternary)
+    Spacer(modifier = Modifier.height(12.dp))
+    Text(news.content, style = PicoTheme.typography.bodyMedium, color = PicoTheme.colorScheme.labelSecondary)
 }
 
 /**
