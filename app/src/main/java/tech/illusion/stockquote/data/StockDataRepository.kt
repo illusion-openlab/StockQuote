@@ -58,4 +58,12 @@ object StockDataRepository {
                 if (it == null) Log.w(TAG, "$code news: fetch failed") else Log.d(TAG, "$code news <- eastmoney (${it.size} 条)")
             }
         }
+
+    /** 新闻原文全文，见 [EastmoneyArticleSource.fetchFullContent]。`null` = 抓取/解析失败，调用方退回摘要。 */
+    suspend fun fetchArticle(url: String): String? =
+        withContext(Dispatchers.IO) {
+            EastmoneyArticleSource.fetchFullContent(url).also {
+                if (it == null) Log.w(TAG, "article fetch failed: $url") else Log.d(TAG, "article <- eastmoney (${it.length} 字)")
+            }
+        }
 }

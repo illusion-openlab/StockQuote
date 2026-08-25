@@ -164,6 +164,9 @@ fun DetailScreen(code: String?, headerEndInset: Dp = 0.dp) {
         var moreInfoOpen by remember { mutableStateOf(false) }
         var newsExpanded by remember(stock.code) { mutableStateOf(false) }
         val newsCache = remember { mutableStateMapOf<String, List<StockNews>>() }
+        // 按新闻 url 缓存抓到的全文，见 NewsDetailScreen；和 newsCache 一样跟 DetailScreen 这次 composition
+        // 同生命周期，不做跨进程重启持久化。
+        val articleCache = remember { mutableStateMapOf<String, String>() }
         val indicators = remember {
             mutableStateMapOf(
                 "ma5" to true, "ma10" to true, "ma20" to true, "ma30" to false, "ma180" to false,
@@ -331,10 +334,10 @@ fun DetailScreen(code: String?, headerEndInset: Dp = 0.dp) {
             // 面板像沿左边铰链掀开的书页/门扇一样朝右侧转开，而不是绕自身中心转。
             Subwindow(
                 placement = SubwindowPlacement.Right,
-                rotation3D = Rotation3D(degree = 45f, axis = RotationAxis3D.Y, pivot = NormalizedPoint3D.Left),
+                rotation3D = Rotation3D(degree = -45f, axis = RotationAxis3D.Y, pivot = NormalizedPoint3D.Left),
             ) {
                 PicoTheme(colorScheme = StockQuoteColorScheme) {
-                    NewsPanel(code = stock.code, cache = newsCache)
+                    NewsPanel(code = stock.code, cache = newsCache, articleCache = articleCache)
                 }
             }
         }
@@ -760,10 +763,15 @@ private fun SubPanel(title: String, legend: List<LegendEntry>, content: @Composa
 
 /**
  * 资讯 `Subwindow` 的内容。`cache` 是 `DetailScreen` 传下来的、跟它同生命周期的按 code 缓存——同一次
- * 打开/关闭同一只股票不重复发请求，见设计文档 §3。
+ * 打开/关闭同一只股票不重复发请求，见设计文档 §3。`articleCache` 同理，按 `StockNews.url` 缓存抓到的
+ * 新闻全文，见 [NewsDetailScreen]。
  */
 @Composable
-private fun NewsPanel(code: String, cache: SnapshotStateMap<String, List<StockNews>>) {
+private fun NewsPanel(
+    code: String,
+    cache: SnapshotStateMap<String, List<StockNews>>,
+    articleCache: SnapshotStateMap<String, String>,
+) {
     var loadFailed by remember(code) { mutableStateOf(false) }
     var reloadToken by remember(code) { mutableIntStateOf(0) }
     // push/pop 导航：非空时整块换成 NewsDetailScreen，回退按钮把它清回 null。跟 code 一起 remember，
@@ -788,7 +796,7 @@ private fun NewsPanel(code: String, cache: SnapshotStateMap<String, List<StockNe
     ) {
         val currentNews = selectedNews
         if (currentNews != null) {
-            NewsDetailScreen(news = currentNews, onBack = { selectedNews = null })
+            NewsDetailScreen(news = currentNews, articleCache = articleCache, onBack = { selectedNews = null })
         } else {
             Text("资讯", style = PicoTheme.typography.titleMedium, color = PicoTheme.colorScheme.labelPrimary)
             Spacer(modifier = Modifier.height(12.dp))
@@ -839,9 +847,28 @@ private fun NewsRow(news: StockNews, onClick: () -> Unit) {
     }
 }
 
-/** 新闻详情页：`NewsRow` 点击后 push 进来的整屏，顶部「← 返回」pop 回列表（用户 2026-08-25 要求）。 */
+/**
+ * 新闻详情页：`NewsRow` 点击后 push 进来的整屏，顶部「← 返回」pop 回列表（用户 2026-08-25 要求）。
+ *
+ * `news.content`（列表页搜索接口自带的摘要）先顶着立刻显示——它有时候只是搜索命中片段甚至是表格碎片
+ * （用户反馈"只显示部分信息"就是这个），所以这里异步打 `news.url` 抓东财文章镜像页的正文全文，抓到就
+ * 原地把显示内容换成全文；抓不到（网络失败/页面模板变了）就继续显示摘要，不弹错误——摘要好歹能看。
+ */
 @Composable
-private fun NewsDetailScreen(news: StockNews, onBack: () -> Unit) {
+private fun NewsDetailScreen(
+    news: StockNews,
+    articleCache: SnapshotStateMap<String, String>,
+    onBack: () -> Unit,
+) {
+    var fetchFailed by remember(news.url) { mutableStateOf(false) }
+    LaunchedEffect(news.url) {
+        if (news.url.isBlank() || articleCache.containsKey(news.url)) return@LaunchedEffect
+        val result = StockDataRepository.fetchArticle(news.url)
+        if (result != null) articleCache[news.url] = result else fetchFailed = true
+    }
+    val fullContent = articleCache[news.url]
+    val isFetchingFull = news.url.isNotBlank() && fullContent == null && !fetchFailed
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -858,7 +885,19 @@ private fun NewsDetailScreen(news: StockNews, onBack: () -> Unit) {
     Spacer(modifier = Modifier.height(4.dp))
     Text(news.publicTime, style = PicoTheme.typography.labelSmall, color = PicoTheme.colorScheme.labelQuaternary)
     Spacer(modifier = Modifier.height(12.dp))
-    Text(news.content, style = PicoTheme.typography.bodyMedium, color = PicoTheme.colorScheme.labelSecondary)
+    Text(fullContent ?: news.content, style = PicoTheme.typography.bodyMedium, color = PicoTheme.colorScheme.labelSecondary)
+    if (isFetchingFull) {
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CircularProgressIndicator(progressSize = CircularProgressDefaults.circleProgressSize(14.dp))
+            Text("加载完整正文中…", style = PicoTheme.typography.labelSmall, color = PicoTheme.colorScheme.labelQuaternary)
+        }
+    } else if (fetchFailed) {
+        // 明确的终态，不是"一直转圈"——抓取全文失败（无 URL、网络失败、页面模板变了）不是错误，以上
+        // 显示的就是能拿到的全部内容（列表页摘要），如实说清楚，别让用户以为还在加载。
+        Spacer(modifier = Modifier.height(10.dp))
+        Text("未能获取完整正文，以上为搜索摘要", style = PicoTheme.typography.labelSmall, color = PicoTheme.colorScheme.labelQuaternary)
+    }
 }
 
 /**
