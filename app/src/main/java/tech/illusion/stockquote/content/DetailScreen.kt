@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -291,7 +290,7 @@ fun DetailScreen(code: String?, headerEndInset: Dp = 0.dp) {
         )
         if (newsExpanded) {
             Subwindow(placement = SubwindowPlacement.Right) {
-                PicoTheme {
+                PicoTheme(colorScheme = StockQuoteColorScheme) {
                     NewsPanel(code = stock.code, cache = newsCache)
                 }
             }
@@ -769,7 +768,7 @@ private fun NewsPanel(code: String, cache: SnapshotStateMap<String, List<StockNe
     Column(
         modifier = Modifier
             .fillMaxHeight()
-            .width(360.dp)
+            .fillMaxWidth()
             .background(PicoTheme.colorScheme.fillPrimary)
             .padding(16.dp)
             .verticalScroll(rememberScrollState()),

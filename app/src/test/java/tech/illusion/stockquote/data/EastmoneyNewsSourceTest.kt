@@ -38,6 +38,12 @@ class EastmoneyNewsSourceTest {
     }
 
     @Test
+    fun `stripJsonpWrapper tolerates a trailing semicolon and whitespace`() {
+        val wrapped = "jQuery_stockquote({\"code\":0});\n"
+        assertEquals("{\"code\":0}", EastmoneyNewsSource.stripJsonpWrapper(wrapped))
+    }
+
+    @Test
     fun `stripHighlightTags removes em wrapper without touching the rest of the text`() {
         // 这是 2026-08-25 对 600519 实测抓到的真实标题片段，接口对每个匹配到关键词的数字/字符
         // 单独包一层 <em>，不是整段包一次。
