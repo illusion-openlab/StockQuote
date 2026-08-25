@@ -704,7 +704,24 @@ trap '"$LOCK" release "$OWNER" emulator-5554 >/dev/null 2>&1' EXIT INT TERM
   - 截图确认"资讯 ▾"芯片渲染正确，位置在价格头部下方、今开/最高/最低网格上方，拍到的是**主窗口右侧
     分栏里的 `DetailScreen` 实例**（自选列表 + 详情左右分栏，示例股票是中铁装配/300374）。这是真实的
     视觉证据：芯片存在、和深色主题其余部分风格一致、没有和任何东西视觉冲突。
-  - **没验证**：芯片在**独立详情窗口**里的外观（这次只拍了主窗口分栏那一侧，独立窗口那条还是空的）。
+  - ⚠️ **最终整体评审抓到一个只截"芯片"这张图看不出来的 Critical 问题**：`Subwindow` 里包内容用的是
+    裸 `PicoTheme { ... }`（没传 `colorScheme`）。`PicoTheme` 的真实签名是
+    `colorScheme: ColorScheme = systemColorScheme(LocalContext.current)`——**不会**自动继承外层
+    `LocalColorScheme`，裸调用会把面板换成系统自适应配色，而不是本项目固定的 `StockQuoteColorScheme`
+    （`Main.kt:51,68` 两个宿主窗口都是显式传 `PicoTheme(colorScheme = StockQuoteColorScheme)`）。加上
+    `Subwindow` 内部写死 `Material.Regular`（毛玻璃）且没有关闭选项，配色一错，面板底色就可能变成半透明的
+    系统色而不是不透明的 `#0F1318`，正好复现"面板发白/可读性不强"这类以前改版专门修过的问题。已修
+    （commit `82134cc`）：改成 `PicoTheme(colorScheme = StockQuoteColorScheme) { ... }`。
+    **教训记一笔**：`PicoTheme` 的 `colorScheme` 参数不继承环境，每一处嵌套的 `PicoTheme` 调用都要显式传
+    `StockQuoteColorScheme`，别假设"反正在 `WindowContainer` 里就会自动继承外层主题"。
+  - 用本项目已有的"临时强制默认开启→截图→改回"手法（KDJ/RSI/BOLL 当年也是这么验证的，见下面"下一步"第 6
+    条）在修完配色后重新截了一张**真正打开的资讯面板**：`Subwindow` 贴着**整个主窗口**右边界浮出，深色
+    背景、白色标题"资讯"、真实抓到的新闻列表（标题+发布时间，例如"股东户数降幅榜：4股最新股东户数..."
+    "2026-08-20 17:15:00"），没有和自选列表/详情分栏产生任何重叠或裁切。这确认了：①配色修复生效
+    ②数据链路（`fetchNews` → 解析 → 排序 → 渲染）端到端走通③"两处都要"的空间关系设计是对的——面板浮在
+    整个宿主窗口外面，不会挤占分栏内部空间。
+  - **没验证**：芯片/面板在**独立详情窗口**里的外观（两轮截图用的都是默认启动的主窗口分栏，独立窗口
+    那条还是空的）。
   - **没验证、也没法自动化验证**：真正的交互流程——点"资讯"、`Subwindow` 弹出、loading→有数据/空态的
     切换、点某条新闻展开/收起、再点一次"资讯"关闭、切换股票时面板自动收起。本项目已有的一条硬限制
     （见上面"`adb shell input swipe/tap` 送不进 spatial 面板"，K 线拖拽那次注入前后两张截图逐字节相同）
