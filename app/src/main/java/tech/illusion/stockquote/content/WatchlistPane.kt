@@ -59,7 +59,8 @@ internal val ListPaneWidth = 400.dp
 @Composable
 internal fun WatchlistPane(
     selectedCode: String?,
-    onSelect: (String) -> Unit,
+    /** 契约 v8：只给长按菜单的「切换」用；行点击**不再**改主窗口分栏。 */
+    onSwitch: (String) -> Unit,
     onOpenSearch: () -> Unit,
     onOpenInNewWindow: (String) -> Unit,
     onPinToTop: (String) -> Unit,
@@ -143,7 +144,7 @@ internal fun WatchlistPane(
                         editMode = editMode,
                         selected = code == selectedCode,
                         menuOpen = code == menuForCode,
-                        onSelect = { onSelect(code) },
+                        onSwitch = { onSwitch(code) },
                         onLongPress = { menuForCode = code },
                         onDismissMenu = { menuForCode = null },
                         onDeleteRequest = { onRemoveRequest(code) },
@@ -155,7 +156,6 @@ internal fun WatchlistPane(
             }
         }
     }
-
 }
 
 @Composable
@@ -182,7 +182,7 @@ internal fun WatchlistRow(
     editMode: Boolean,
     selected: Boolean,
     menuOpen: Boolean,
-    onSelect: () -> Unit,
+    onSwitch: () -> Unit,
     onLongPress: () -> Unit,
     onDismissMenu: () -> Unit,
     onDeleteRequest: () -> Unit,
@@ -224,7 +224,14 @@ internal fun WatchlistRow(
                                 },
                             )
                         },
-                        onTap = { onSelect() },
+                        // 契约增量 v8：点击一行**只开独立窗口，不再改主窗口分栏**
+                        // （用户 2026-09-20："主窗口默认不跟随切换个股"）。这推翻了 v7 的
+                        // "点击 = 选中 + 开新窗"。要改分栏走长按菜单里的「切换」。
+                        //
+                        // 该股已经开着窗口时不会新建第二个：`openInNewWindow` 里的
+                        // `DetailWindowRegistry.prepareOpen` 会识别出复用，只把那个窗口拉到前台，
+                        // 并让 placement 返回 none() 以免把用户拖走的窗口拉回原位（见 Main.kt）。
+                        onTap = { onOpenInNewWindow() },
                     )
                 },
             // 行背景必须走 ListItem 自己的 colors，不能在调用方叠 Modifier.background——
@@ -315,6 +322,8 @@ internal fun WatchlistRow(
                 onOpenInNewWindow = onOpenInNewWindow,
                 onPinToTop = onPinToTop,
                 onRemove = onDeleteRequest,
+                // 只有列表行的菜单有「切换」；详情栏右上角 `⋯` 不传（那里已经在显示这只股票）
+                onSwitch = onSwitch,
             )
         }
     }

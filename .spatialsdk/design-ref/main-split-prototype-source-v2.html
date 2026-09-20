@@ -1,0 +1,337 @@
+<!--
+  本地镜像：设计契约增量 v2「主窗口分栏改版」的视觉稿源码。
+  线上同源：https://claude.ai/code/artifact/35fb16fb-f02f-408b-bbe3-8db95d821a23（2026-08-11 取回）
+  取回原因：v2/v3 的原型原本只以 claude.ai 链接形式记在契约元信息里，本地没有副本，换一个会话就看不到
+  实际视觉。v1 的原型副本是同目录的 detail-window-prototype-source.html。
+
+  ⚠️ 注意：这份稿子里"内嵌预览只画 MA5/MA10、完整指标只在新窗口打开里提供"的分级设计
+  （见 .legend 那行文案）**已被用户 2026-08-11 的裁决推翻**——详情页设计统一，不存在独立窗口专用设计。
+  看这份稿时请把那条当作已作废，其余分栏/长按菜单/关键指标网格的部分仍然有效。
+-->
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>StockQuote 主窗口分栏改版原型</title>
+<style>
+  :root {
+    /* App-mockup tokens: these mirror StockQuoteColorScheme exactly (StockTheme.kt) — the real
+       app deliberately uses a fixed palette, not system vibrant colors, so the "window" below does
+       NOT change with the viewer's theme. Only the surrounding page chrome (below) is theme-aware. */
+    --panel: #ffffff;
+    --label-primary: #34362F;
+    --label-secondary: #4F5245;
+    --label-tertiary: #6C6F61;
+    --label-quaternary: #999C8C;
+    --fill-secondary: rgba(93,125,140,0.4);
+    --fill-tertiary: rgba(52,54,47,0.04);
+    --interaction: #5D7D8C;
+    --error: #A85A4C;
+    --alert: #A3813F;
+    --divider: rgba(52,54,47,0.1);
+    --up: #A85A4C;
+    --down: #5F7D61;
+    --ma5: #B8935A;
+    --ma10: #7D95A3;
+
+    /* Page chrome tokens: these DO follow the viewer's theme. */
+    --page-bg: #e5e3dc;
+    --page-heading: #4F5245;
+    --page-caption: #6C6F61;
+    --page-code-bg: rgba(52,54,47,0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --page-bg: #26251f;
+      --page-heading: #d8d5c8;
+      --page-caption: #a5a294;
+      --page-code-bg: rgba(255,255,255,0.08);
+    }
+  }
+  :root[data-theme="dark"] {
+    --page-bg: #26251f;
+    --page-heading: #d8d5c8;
+    --page-caption: #a5a294;
+    --page-code-bg: rgba(255,255,255,0.08);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    background: var(--page-bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+    padding: 32px 16px 60px;
+    color: var(--page-heading);
+  }
+  h1 { font-size: 16px; font-weight: 600; margin: 0; color: var(--page-heading); }
+  .caption { font-size: 12px; color: var(--page-caption); max-width: 900px; text-align: center; line-height: 1.6; }
+  .caption code { background: var(--page-code-bg); padding: 1px 5px; border-radius: 4px; }
+  .window {
+    width: 1080px;
+    height: 640px;
+    background: var(--panel);
+    border-radius: 20px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.18);
+    display: flex;
+    overflow: hidden;
+    position: relative;
+  }
+  .list-pane {
+    width: 400px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--divider);
+    display: flex;
+    flex-direction: column;
+    padding: 20px 16px;
+  }
+  .list-title { font-size: 20px; font-weight: 600; margin-bottom: 14px; }
+  .toolbar { display: flex; gap: 10px; margin-bottom: 14px; }
+  .btn-edit {
+    padding: 6px 14px; border-radius: 16px; background: var(--fill-tertiary);
+    font-size: 12px; color: var(--label-secondary); white-space: nowrap;
+  }
+  .search {
+    flex: 1; padding: 6px 12px; border-radius: 16px; background: var(--fill-tertiary);
+    font-size: 12px; color: var(--label-tertiary);
+  }
+  .col-header { display: flex; justify-content: space-between; padding: 0 2px 8px; font-size: 11px; color: var(--label-tertiary); border-bottom: 1px solid var(--divider); margin-bottom: 4px;}
+  .row {
+    display: flex; align-items: center; gap: 10px; padding: 10px 4px;
+    border-bottom: 1px solid var(--divider); cursor: pointer; position: relative;
+  }
+  .row.selected { background: var(--fill-tertiary); border-radius: 10px; }
+  .star { width: 20px; text-align: center; color: var(--label-quaternary); font-size: 13px; }
+  .star.on { color: var(--interaction); }
+  .row-main { flex: 1; min-width: 0; }
+  .row-name { font-size: 14px; font-weight: 500; }
+  .row-code { font-size: 11px; color: var(--label-tertiary); }
+  .row-right { text-align: right; display: flex; align-items: center; gap: 8px; }
+  .spark { width: 44px; height: 18px; }
+  .row-price { font-size: 14px; font-weight: 500; min-width: 54px; text-align: right; }
+  .row-chg { font-size: 11px; min-width: 46px; text-align: right; }
+  .up { color: var(--up); }
+  .down { color: var(--down); }
+
+  .long-press-hint {
+    position: absolute; left: 8px; top: 96px; background: var(--label-primary); color: #fff;
+    font-size: 10px; padding: 4px 8px; border-radius: 6px; opacity: 0.85;
+  }
+  .ctx-menu {
+    position: absolute; left: 330px; top: 92px; width: 150px; background: #fff;
+    border-radius: 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.25); padding: 6px; z-index: 20;
+    border: 1px solid var(--divider);
+  }
+  .ctx-item { padding: 9px 10px; font-size: 12px; border-radius: 8px; color: var(--label-primary); }
+  .ctx-item:hover, .ctx-item.hl { background: var(--fill-tertiary); }
+  .ctx-item.danger { color: var(--error); }
+
+  .detail-pane { flex: 1; padding: 20px 22px; display: flex; flex-direction: column; overflow: hidden; }
+  .detail-top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .detail-name { font-size: 22px; font-weight: 700; }
+  .detail-code { font-size: 12px; color: var(--label-tertiary); margin-top: 2px; }
+  .detail-price-block { text-align: right; }
+  .detail-price { font-size: 26px; font-weight: 700; }
+  .detail-chg { font-size: 13px; margin-top: 2px; }
+  .new-window-btn {
+    display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--interaction);
+    background: var(--fill-tertiary); padding: 6px 10px; border-radius: 14px; margin-top: 8px; align-self: flex-end;
+  }
+
+  .range-row { display: flex; gap: 6px; margin: 14px 0 10px; }
+  .range-chip { padding: 5px 12px; border-radius: 12px; font-size: 11px; color: var(--label-tertiary); border: 1px solid var(--divider); }
+  .range-chip.on { background: var(--interaction); color: #fff; border-color: var(--interaction); }
+
+  .chart-card {
+    background: var(--fill-tertiary); border-radius: 12px; height: 150px; margin-bottom: 14px;
+    display: flex; align-items: flex-end; padding: 8px; position: relative;
+  }
+  .chart-svg { width: 100%; height: 100%; }
+
+  .stats-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; font-size: 12px;
+  }
+  .stat-row { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--divider); }
+  .stat-label { color: var(--label-tertiary); }
+  .stat-value { color: var(--label-primary); font-weight: 500; }
+  .stat-value.dash { color: var(--label-quaternary); font-weight: 400; }
+  .stat-value.tier2::after { content: "†"; color: var(--alert); margin-left: 2px; font-weight: 400; }
+
+  .legend {
+    margin-top: 10px; font-size: 10.5px; color: var(--label-quaternary); line-height: 1.7;
+  }
+  .legend b { color: var(--label-secondary); }
+  .dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:4px; }
+</style>
+</head>
+<body>
+
+<h1>方案一 — 主窗口默认列表+详情分栏，默认态</h1>
+<div class="window">
+  <div class="list-pane">
+    <div class="list-title">自选股列表</div>
+    <div class="toolbar">
+      <div class="btn-edit">编辑</div>
+      <div class="search">🔍  查股票名称或代码…</div>
+    </div>
+    <div class="col-header"><span>股票/代码</span><span>价格</span><span>涨跌幅</span></div>
+
+    <div class="row selected">
+      <div class="star on">★</div>
+      <div class="row-main">
+        <div class="row-name">贵州茅台</div>
+        <div class="row-code">600519</div>
+      </div>
+      <div class="row-right">
+        <svg class="spark" viewBox="0 0 44 18"><polyline points="0,12 8,10 16,13 24,6 32,8 44,3" fill="none" stroke="#A85A4C" stroke-width="1.6"/></svg>
+        <div class="row-price">1348.87</div>
+        <div class="row-chg up">+3.03%</div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="star">☆</div>
+      <div class="row-main">
+        <div class="row-name">招商银行</div>
+        <div class="row-code">600036</div>
+      </div>
+      <div class="row-right">
+        <svg class="spark" viewBox="0 0 44 18"><polyline points="0,10 8,11 16,9 24,10 32,7 44,8" fill="none" stroke="#A85A4C" stroke-width="1.6"/></svg>
+        <div class="row-price">38.91</div>
+        <div class="row-chg up">+0.28%</div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="star on">★</div>
+      <div class="row-main">
+        <div class="row-name">宁德时代</div>
+        <div class="row-code">300750</div>
+      </div>
+      <div class="row-right">
+        <svg class="spark" viewBox="0 0 44 18"><polyline points="0,13 8,9 16,10 24,7 32,8 44,4" fill="none" stroke="#A85A4C" stroke-width="1.6"/></svg>
+        <div class="row-price">393.87</div>
+        <div class="row-chg up">+1.86%</div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="star">☆</div>
+      <div class="row-main">
+        <div class="row-name">中国平安</div>
+        <div class="row-code">601318</div>
+      </div>
+      <div class="row-right">
+        <svg class="spark" viewBox="0 0 44 18"><polyline points="0,6 8,8 16,7 24,10 32,9 44,12" fill="none" stroke="#5F7D61" stroke-width="1.6"/></svg>
+        <div class="row-price">53.31</div>
+        <div class="row-chg down">-0.13%</div>
+      </div>
+    </div>
+
+    <div class="long-press-hint">长按行 → 呼出菜单</div>
+  </div>
+
+  <div class="detail-pane">
+    <div class="detail-top">
+      <div>
+        <div class="detail-name">贵州茅台</div>
+        <div class="detail-code">600519 · 沪</div>
+      </div>
+      <div class="detail-price-block">
+        <div class="detail-price">1348.87</div>
+        <div class="detail-chg up">+3.03%</div>
+      </div>
+    </div>
+
+    <div class="range-row">
+      <div class="range-chip">近1月</div>
+      <div class="range-chip on">近3月</div>
+      <div class="range-chip">近1年</div>
+      <div style="flex:1"></div>
+      <div class="new-window-btn">⤢ 在新窗口打开</div>
+    </div>
+
+    <div class="chart-card">
+      <svg class="chart-svg" viewBox="0 0 400 130" preserveAspectRatio="none">
+        <polyline points="0,90 20,85 40,88 60,70 80,60 100,50 120,55 140,40 160,45 180,35 200,42 220,30 240,38 260,20 280,28 300,15 320,25 340,10 360,18 380,22 400,8"
+          fill="none" stroke="#B8935A" stroke-width="1.6"/>
+        <polyline points="0,95 20,92 40,90 60,82 80,75 100,68 120,66 140,58 160,60 180,52 200,55 220,48 240,50 260,40 280,44 300,36 320,40 340,30 360,34 380,36 400,28"
+          fill="none" stroke="#7D95A3" stroke-width="1.6"/>
+      </svg>
+    </div>
+
+    <div class="legend"><span class="dot" style="background:#B8935A"></span>MA5&nbsp;&nbsp;<span class="dot" style="background:#7D95A3"></span>MA10 — 完整 MA/MACD/KDJ/RSI/BOLL 指标切换只在"新窗口打开"里提供，内嵌预览只画 MA5/MA10，保持轻量</div>
+
+    <div style="margin-top:16px; font-size:12px; color:var(--label-tertiary); margin-bottom:6px;">关键指标</div>
+    <div class="stats-grid">
+      <div class="stat-row"><span class="stat-label">今日开盘价</span><span class="stat-value">1345.20</span></div>
+      <div class="stat-row"><span class="stat-label">今日最高价</span><span class="stat-value">1352.60</span></div>
+      <div class="stat-row"><span class="stat-label">今日最低价</span><span class="stat-value">1340.10</span></div>
+      <div class="stat-row"><span class="stat-label">成交量</span><span class="stat-value">4.21万手</span></div>
+      <div class="stat-row"><span class="stat-label">平均成交量</span><span class="stat-value tier2">3.86万手</span></div>
+      <div class="stat-row"><span class="stat-label">市盈率</span><span class="stat-value tier2">28.4</span></div>
+      <div class="stat-row"><span class="stat-label">52周最高价</span><span class="stat-value tier2">1745.00</span></div>
+      <div class="stat-row"><span class="stat-label">52周最低价</span><span class="stat-value tier2">1208.50</span></div>
+      <div class="stat-row"><span class="stat-label">市值</span><span class="stat-value tier2">1.69万亿</span></div>
+      <div class="stat-row"><span class="stat-label">贝塔系数</span><span class="stat-value dash">—</span></div>
+      <div class="stat-row"><span class="stat-label">收益率</span><span class="stat-value dash">—</span></div>
+      <div class="stat-row"><span class="stat-label">每股收益</span><span class="stat-value dash">—</span></div>
+    </div>
+  </div>
+</div>
+
+<h1>方案一 — 长按列表行，呼出菜单</h1>
+<div class="window">
+  <div class="list-pane">
+    <div class="list-title">自选股列表</div>
+    <div class="toolbar">
+      <div class="btn-edit">编辑</div>
+      <div class="search">🔍  查股票名称或代码…</div>
+    </div>
+    <div class="col-header"><span>股票/代码</span><span>价格</span><span>涨跌幅</span></div>
+    <div class="row selected">
+      <div class="star on">★</div>
+      <div class="row-main"><div class="row-name">贵州茅台</div><div class="row-code">600519</div></div>
+      <div class="row-right">
+        <svg class="spark" viewBox="0 0 44 18"><polyline points="0,12 8,10 16,13 24,6 32,8 44,3" fill="none" stroke="#A85A4C" stroke-width="1.6"/></svg>
+        <div class="row-price">1348.87</div><div class="row-chg up">+3.03%</div>
+      </div>
+    </div>
+    <div class="row" style="background:var(--fill-tertiary); border-radius:10px;">
+      <div class="star">☆</div>
+      <div class="row-main"><div class="row-name">招商银行</div><div class="row-code">600036</div></div>
+      <div class="row-right">
+        <svg class="spark" viewBox="0 0 44 18"><polyline points="0,10 8,11 16,9 24,10 32,7 44,8" fill="none" stroke="#A85A4C" stroke-width="1.6"/></svg>
+        <div class="row-price">38.91</div><div class="row-chg up">+0.28%</div>
+      </div>
+      <div class="ctx-menu">
+        <div class="ctx-item hl">⤢ 新窗口打开</div>
+        <div class="ctx-item">⇧ 置顶</div>
+        <div class="ctx-item danger">✕ 移除</div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="star on">★</div>
+      <div class="row-main"><div class="row-name">宁德时代</div><div class="row-code">300750</div></div>
+      <div class="row-right">
+        <svg class="spark" viewBox="0 0 44 18"><polyline points="0,13 8,9 16,10 24,7 32,8 44,4" fill="none" stroke="#A85A4C" stroke-width="1.6"/></svg>
+        <div class="row-price">393.87</div><div class="row-chg up">+1.86%</div>
+      </div>
+    </div>
+  </div>
+  <div class="detail-pane" style="opacity:0.3;">
+    <div class="detail-top">
+      <div><div class="detail-name">贵州茅台</div><div class="detail-code">600519 · 沪</div></div>
+      <div class="detail-price-block"><div class="detail-price">1348.87</div><div class="detail-chg up">+3.03%</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="caption">
+  <b>†</b> 标记的字段（平均成交量/市盈率/52周高低/市值）需要在实现阶段用 curl 核实 Eastmoney 免费接口是否真的带这些字段，
+  核实不到就会像"贝塔系数/收益率/每股收益"一样显示 —（参考图本身对指数也是用 — 兜底，这不是我们没做，是免费源没有）。<br/>
+  长按菜单用真实存在的 <code>Menu</code>/<code>MenuItem</code> 组件 + <code>detectTapGestures(onLongPress=...)</code>，都已在这个项目实际用的
+  0.13.3 SDK 源码里核实过，不是臆造 API。
+</div>
+
+</body>
+</html>

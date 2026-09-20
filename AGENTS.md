@@ -970,3 +970,92 @@ tag 非 null 时同 id 同 tag 会**复用**，换新 tag 又是新实例。所�
 
 **`closeWindowContainer(id, tag = null)` 会关掉该 id 下的所有窗口**——早先"只能开一个详情窗口"就是因为
 每次开新窗口前先无差别关了一次。要关某一个就必须带上 tag。
+
+## 窗口摆放位置：只能在声明侧给，且 `containers` 是按焦点排序的
+
+契约增量 v6（2026-09-20 实施完毕）。详情窗口默认贴主窗口右侧，已有详情窗时向右瀑布。
+
+**位置参数不在 `openWindowContainer` 上**——它只有 `(id, tag, bundle)`。位置在 `WindowContainer(...)`
+声明上的 `placement: (PlacementContext.() -> Placement)?`（`foundation/dsl/WindowContainer.kt:109`）。
+
+```kotlin
+placement = {
+    val anchor = containers.firstOrNull { it.id == DETAIL_WINDOW_ID }
+        ?: containers.firstOrNull { it.id != DETAIL_WINDOW_ID }   // = 主窗口
+    anchor?.let { Placement.right(it) } ?: Placement.none()
+}
+```
+
+⚠️ **三个反直觉的点，改这段前先看**：
+
+1. **`containers` 按焦点排序，最近获得焦点的在最前**，不是打开顺序
+   （`SpatialContainerManager.OrderedUniqueList.items() = map.values.toList().asReversed()`）。
+   写成 `lastOrNull` 会锚到最久没碰过的那个窗口，瀑布静默退化成「全部堆在同一处」。
+2. lambda 在新容器参数构建**之前**求值（`SpatialContainerApis.kt:389`），所以 `containers` 里
+   **不含正在创建的这一个**。
+3. **`Dp.Unspecified` 不是「无偏移」**。不传 offset 时系统填默认 `placementOffset=112`
+   （`placement=0` 的主窗口日志里也是 112）。想调间距必须显式传，但该参数的轴向/正负无文档、未实测。
+
+**能力边界**：只有相对锚点的上/下/左/右 + 一个 `Dp`。没有绝对坐标、没有朝向角、没有深度。
+**窗口开出来之后不能移动**——`WindowContainerParamsUpdater` 只有
+`setResizeRestriction`/`setVolumeBasePanelType`/`setCaptionBarType`。
+
+**验证手法**：截图判不出第二个及之后窗口的落点（出了模拟器相机视野）。真正的证据是系统日志——
+`adb -s <serial> logcat -d | grep -a "WSContainerManager.*createdContainer"`，里面有
+`placement=4`(Right) / `placementAnchorId=<锚点 containerId>`，比截图可靠得多。`grep` 读 logcat
+**必须带 `-a`**，否则会被当二进制静默跳过。
+
+## ~~点击自选股行 = 选中 + 开新窗口（契约 v7）~~ —— 已被契约 v8 推翻，见下一节
+
+`WatchlistPane.kt` 行的 `onTap` 是 `{ onSelect(); onOpenInNewWindow() }`，不是只 `onSelect()`。
+
+**同一只股票会同时出现在主窗口右侧分栏和独立新窗口里，内容重复——这是用户在三个方案里明确选的
+既定代价，不是 bug，别"顺手修掉"。** 另外两个被否掉的方案是：去掉分栏让主窗变纯列表、
+保留分栏但点击不更新它。
+
+连带事实：
+- 长按菜单里的"在新窗口打开"现在和点击功能重复，**故意留着**（契约 v7 §4 不做清单第 2 条）。
+- **搜索面板的点击行为没改**：搜索里点一行仍然只更新左栏/分栏预览，不开新窗口（契约 v5 §4）。
+- 连点多只不同股票会连开多个窗口，没有数量上限——与裁决八"可并排比较"一致。
+
+**验证手法**：模拟器 `input tap` 送不进 spatial 面板，点不动行。门禁 B 用的是
+`GATE-B-TEMP` 临时代码直接调用行绑定的那两个 lambda，**最外层手势识别覆盖不到，只能真机确认**。
+判定时务必选**非首行**的股票（首行本就是默认选中项，切没切在截图里判不出来）。
+
+## 契约 v8（2026-09-20，现行）：点击/切换分离 + 窗口左右均匀分布
+
+**推翻了上一节的 v7。** 现行交互：
+
+| 交互 | 主窗口分栏 | 独立窗口 |
+|---|---|---|
+| 点击列表行（未开窗） | **不动** | 开一个新窗口 |
+| 点击列表行（已开窗） | **不动** | 不新建，拉到前台 |
+| 长按 →「切换」 | **切到该股** | 不开窗 |
+| 长按 →「在新窗口打开」/「置顶」/「移除」 | 同上/不变 | 同上/不变 |
+
+长按菜单四项：切换 / 在新窗口打开 / 置顶 / 移除。「切换」是 `StockActionMenu` 的**可选参数**，
+只有列表行传；详情栏右上角 `⋯` 不传（那里已经在显示这只股票）。
+
+### ⚠️ SDK 没有"查询已开窗口"的 API，所以有个账本
+
+`SpatialNavigator` 只有 open/close/minimize/restore，**没有任何查询方法**；
+`SpatialContainerStateManager` 只报当前容器自己的 focus/onstage/sighted。唯一能看到全部已开窗口的
+地方是 `placement` lambda 的 `PlacementContext.containers`，而它只在 open 时才被调用。
+
+于是有了 `content/DetailWindowRegistry.kt`（进程内单例）。改它之前必须知道的三件事：
+
+1. **`prepareOpen` 必须在 `openWindowContainer` 之前调用**——open 会同步触发 placement 求值，
+   lambda 靠 `pending*` 拿本次决策（它拿不到本次的 tag）。
+2. **对账 `reconcile` 的 `keep` 必须传 `pendingCode`**。正在打开的那只已经记进账本、但容器还没建好、
+   不在 `containers` 里，不排除就会被当场清掉。这个 bug 实施期踩过一次。
+3. **同 tag 复用（拉前台）也会重新求值 placement**（`SpatialContainerApis.kt:389` 在 open 路径上无条件
+   调用 `toSpatialContainerParams`）。所以复用时必须返回 `Placement.none()`，否则用户拖到别处的
+   窗口会被拉回原位。
+
+账本注销靠详情窗口内容里的 `DisposableEffect.onDispose`。已知残留风险：窗口关了但 onDispose 没跑，
+表现为"点那只股票没反应"，要等下次开别的窗口时 reconcile 自愈。契约 v8 §3 明确接受这个风险。
+
+### 实测到的 placement 枚举值
+
+`NONE=0 / TOP=1 / BOTTOM=2 / LEFT=3 / RIGHT=4`（系统日志 `WSContainerManager ... createdContainer`
+里的 `placement=` 字段）。

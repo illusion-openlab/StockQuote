@@ -1,0 +1,46 @@
+# Gradle files
+.gradle/
+build/
+.kotlin/
+
+# 门禁 B 的验证截图与运行日志：单张 3.5MB 的整场景渲染，37 张就 121MB，而全部源码只有 2.3MB。
+# 它们是可重新生成的验证证据（`.spatialsdk/gate-b-verify.sh <名字>` 一条命令），文字版逐轮记录已经在
+# `.spatialsdk/ui-verification-log.md` 里，所以不进 git 历史（进了想瘦身就得改写历史）。
+# 注意：AGENTS.md 和 design-contract.md 里按文件名引用了这些截图，那些路径是**本地**路径，
+# 新 clone 出来不会有——需要看图就自己重跑对应轮次。
+.spatialsdk/ui-verify/
+artifacts/
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# Log/OS Files
+*.log
+.DS_Store
+
+# Android Studio generated files and folders
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+output.json
+
+# IntelliJ
+*.iml
+.idea/
+misc.xml
+deploymentTargetDropDown.xml
+render.experimental.xml
+
+# Keystore files
+*.jks
+*.keystore
+
+# Google Services (e.g. APIs or Firebase)
+google-services.json
+
+# Android Profiling
+*.hprof
+
+# brainstorming visual companion
+.superpowers/

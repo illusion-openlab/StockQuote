@@ -85,12 +85,20 @@ fun WatchlistHost() {
     // 窗口，正是"只能开一个"的直接原因。现在删掉；bundle 只在新建实例时读，而同 tag 复用的是同一只股票、
     // 内容本来就一样，所以不需要靠"先关再开"来保证内容刷新。
     val openInNewWindow: (String) -> Unit = { code ->
+        // 契约 v8：开窗前先记账。prepareOpen 决定本次是"新建"还是"复用（拉前台）"，并把左/右侧与锚点
+        // 放进 DetailWindowRegistry.pending*，供 Main.kt 的 placement lambda 读走——那个 lambda 拿不到
+        // 本次的 tag，只能靠这个约定传参。**顺序不能反**：open 会同步触发 placement 求值。
+        DetailWindowRegistry.prepareOpen(code)
         navigator.openWindowContainer(
             DETAIL_WINDOW_ID,
             tag = detailWindowTag(code),
             bundle = Bundle().apply { putString("code", code) },
         )
     }
+
+    // 契约 v8：「切换」只改主窗口分栏显示哪只股票，不碰任何窗口。点击列表行**不再**走这个回调
+    // （用户 2026-09-20："主窗口默认不跟随切换个股"），现在只有长按菜单里的「切换」会用到。
+    val switchInMainWindow: (String) -> Unit = { code -> selectedCode = code }
 
     val pinToTop: (String) -> Unit = { code ->
         StockRepository.moveToTop(code)
@@ -177,7 +185,9 @@ fun WatchlistHost() {
             } else {
                 WatchlistPane(
                     selectedCode = activeCode,
-                    onSelect = { selectedCode = it },
+                    // 契约 v8：点击列表行不再改主窗口分栏，所以这里传的是「切换」菜单项的回调，
+                    // 不再是行点击的回调。
+                    onSwitch = switchInMainWindow,
                     onOpenSearch = { searchOpen = true },
                     onOpenInNewWindow = openInNewWindow,
                     onPinToTop = pinToTop,
@@ -222,10 +232,22 @@ internal fun StockActionMenu(
     onOpenInNewWindow: () -> Unit,
     onPinToTop: () -> Unit,
     onRemove: () -> Unit,
+    // 契约 v8：「切换」是**可选项**。这个菜单被列表行长按和详情栏右上角 `⋯` 共用，而详情栏本来就在
+    // 显示那只股票，那里出现"切换"没有意义——所以只有列表行传这个回调，详情栏不传。
+    onSwitch: (() -> Unit)? = null,
 ) {
     // MenuItem 内部已经自带 clickable + LocalIndication + spatialHoverEffect +
     // controllerHapticFeedback（已读 0.13.3 源码确认），所以这里不用自己补点击三件套。
     Menu(onDismissRequest = onDismiss) {
+        if (onSwitch != null) {
+            MenuItem(
+                title = { Text("⇄  切换") },
+                onClick = {
+                    onDismiss()
+                    onSwitch()
+                },
+            )
+        }
         MenuItem(
             title = { Text("⤢  新窗口打开") },
             onClick = {
